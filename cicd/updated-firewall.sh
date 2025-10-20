@@ -27,10 +27,10 @@ get_log_filename() {
 }
 
 # -----------------------------
-# MANUAL UPLOAD MODE
+# MANUAL OR UPLOAD-ONLY MODE
 # -----------------------------
-if [ "$1" == "upload-manual" ]; then
-    echo "📤 Uploading monthly log files to Azure Blob Storage manually..."
+if [ "$1" == "upload-manual" ] || [ "$1" == "upload-only" ]; then
+    echo "📤 Uploading monthly log files to Azure Blob Storage..."
     shopt -s nullglob
     for env_file in "$LOG_DIR"/*.log; do
         [ -f "$env_file" ] || continue
@@ -156,3 +156,4 @@ main() {
 }
 
 main "$@"
+
