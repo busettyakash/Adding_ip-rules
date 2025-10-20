@@ -106,9 +106,9 @@ if [ -n "$DUPLICATE" ]; then
 fi
 
 # ---------------------------
-# Add firewall rule
+# Add firewall rule with ENV prefix
 # ---------------------------
-RULE_NAME="DevOpsAccess_$(date +%Y%m%d_%H%M%S)"
+RULE_NAME="DevOpsAccess_${ENV}_$(date +%Y%m%d_%H%M%S)"
 echo "📝 Adding firewall rule '$RULE_NAME' for IP '$VALIDATED_IP'..."
 az sql server firewall-rule create \
   --resource-group "$RESOURCE_GROUP" \
@@ -124,6 +124,16 @@ echo "✅ Added IP '$VALIDATED_IP' to server '$SERVER_NAME'"
 # ---------------------------
 echo "$(date '+%Y-%m-%d %H:%M:%S') | $SERVER_NAME | $VALIDATED_IP | $RULE_NAME | $DEVELOPER_NAME" >> "$LOG_FILE"
 echo "🗒️ Logged IP to file: $LOG_FILE"
+
+# ---------------------------
+# Display current monthly log for this environment
+# ---------------------------
+echo "📂 Current IPs in $LOG_FILE for environment '$ENV':"
+if [ -s "$LOG_FILE" ]; then
+  cat "$LOG_FILE"
+else
+  echo "- No IPs added yet for this month."
+fi
 
 # ---------------------------
 # Show current firewall rules
