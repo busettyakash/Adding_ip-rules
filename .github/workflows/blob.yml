@@ -6,6 +6,10 @@ on:
     - cron: "30 18 19 * *"
   workflow_dispatch: # manual trigger option
 
+permissions:
+  id-token: write
+  contents: read
+
 jobs:
   upload-logs:
     runs-on: ubuntu-latest
