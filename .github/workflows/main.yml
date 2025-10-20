@@ -70,7 +70,9 @@ jobs:
           ./cicd/updated-firewall.sh \
             "${RESOURCE_GROUP}" \
             "${SERVER_NAME}" \
-            "${{ inputs.ip_address }}"
+            "${{ inputs.ip_address }}" \
+            "${{ inputs.developer_name }}" \
+            "${{ inputs.environment }}"
 
       - name: Display current firewall rules
         run: |
