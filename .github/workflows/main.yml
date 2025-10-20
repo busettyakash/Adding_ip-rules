@@ -43,8 +43,12 @@ jobs:
       - name: Set environment variables
         run: |
           case "${{ inputs.environment }}" in
-            dev|qa)
+            dev)
               echo "RESOURCE_GROUP=gvk-platform-rg" >> $GITHUB_ENV
+              echo "SERVER_NAME=gvk-platform-sql" >> $GITHUB_ENV
+              ;;
+            qa)
+              echo "RESOURCE_GROUP=gvk-platform-rgg" >> $GITHUB_ENV
               echo "SERVER_NAME=gvk-platform-sql" >> $GITHUB_ENV
               ;;
             prod)
@@ -52,17 +56,10 @@ jobs:
               echo "SERVER_NAME=rvcplatform-prod-db" >> $GITHUB_ENV
               ;;
             *)
-              echo "Invalid environment: ${{ inputs.environment }}"
+              echo "Invalid environment"
               exit 1
               ;;
           esac
-
-      - name: Debug environment variables
-        run: |
-          echo "RESOURCE_GROUP=${RESOURCE_GROUP}"
-          echo "SERVER_NAME=${SERVER_NAME}"
-          echo "IP_ADDRESS=${{ inputs.ip_address }}"
-          echo "DEVELOPER=${{ inputs.developer_name }}"
 
       - name: Add IP to database firewall
         run: |
@@ -70,9 +67,7 @@ jobs:
           ./cicd/updated-firewall.sh \
             "${RESOURCE_GROUP}" \
             "${SERVER_NAME}" \
-            "${{ inputs.ip_address }}" \
-            "${{ inputs.developer_name }}" \
-            "${{ inputs.environment }}"
+            "${{ inputs.ip_address }}"
 
       - name: Display current firewall rules
         run: |
@@ -83,20 +78,3 @@ jobs:
             --resource-group "${RESOURCE_GROUP}" \
             --server "${SERVER_NAME}" \
             --output table
-
-      - name: Display current log files for environment
-        run: |
-          LOG_DIR="$GITHUB_WORKSPACE/firewall_logs"
-          echo "📂 Current log files for environment ${{ inputs.environment }}:"
-
-          # Safe glob to avoid exit code 2 if no files exist
-          shopt -s nullglob
-          files=("$LOG_DIR/${{ inputs.environment }}_"*.log)
-          if [ ${#files[@]} -eq 0 ]; then
-            echo "- No log files found"
-          else
-            for f in "${files[@]}"; do
-              echo "- $(basename "$f")"
-            done
-          fi
-          shopt -u nullglob
