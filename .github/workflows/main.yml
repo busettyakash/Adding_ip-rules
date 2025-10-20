@@ -45,7 +45,7 @@ jobs:
           case "${{ inputs.environment }}" in
             dev|qa)
               echo "RESOURCE_GROUP=gvk-platform-rg" >> $GITHUB_ENV
-              echo "SERVER_NAME=gvk-platform-cosmos" >> $GITHUB_ENV
+              echo "SERVER_NAME=gvk-platform-sql" >> $GITHUB_ENV
               ;;
             prod)
               echo "RESOURCE_GROUP=rvc-platform-prod-db-rg" >> $GITHUB_ENV
