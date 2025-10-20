@@ -8,7 +8,8 @@ if ! command -v az &> /dev/null; then
   exit 1
 fi
 
-LOG_DIR="./logs"
+# Absolute log folder path
+LOG_DIR="$HOME/firewall_logs"
 mkdir -p "$LOG_DIR"
 
 # Generate log filename for 20th prev month → 19th current month
@@ -25,6 +26,9 @@ get_log_filename() {
 }
 
 LOG_FILE=$(get_log_filename)
+
+# Print log file path
+echo "📂 Firewall log file: $LOG_FILE"
 
 # Validate IP with optional CIDR
 validate_ip_cidr() {
@@ -59,6 +63,10 @@ log_action() {
   local status="$4"
   local rule_name="$5"
 
+  # Ensure log folder exists
+  mkdir -p "$(dirname "$LOG_FILE")"
+
+  # Add header if file doesn't exist
   if [ ! -f "$LOG_FILE" ]; then
     echo "IP,Developer,Environment,Status,RuleName" >> "$LOG_FILE"
   fi
