@@ -2,77 +2,70 @@
 
 set -e
 
-# Check for required dependency
+# Check az CLI
 if ! command -v az &> /dev/null; then
-  echo "❌ Required dependency 'az' is not installed. Please install it first."
+  echo "❌ Required dependency 'az' is not installed."
   exit 1
 fi
 
-# Directory to store logs
 LOG_DIR="./logs"
 mkdir -p "$LOG_DIR"
 
-# Function to validate IP address with CIDR notation
+# Generate log filename for 20th prev month → 19th current month
+get_log_filename() {
+  today_day=$(date +%d)
+  if [ "$today_day" -ge 20 ]; then
+    start_date=$(date +%Y-%m-20 | xargs date +%d-%m-%Y -d)
+    end_date=$(date -d "20 next month -1 day" +%d-%m-%Y)
+  else
+    start_date=$(date -d "20 last month" +%d-%m-%Y)
+    end_date=$(date -d "19 this month" +%d-%m-%Y)
+  fi
+  echo "$LOG_DIR/${start_date}_to_${end_date}.log"
+}
+
+LOG_FILE=$(get_log_filename)
+
+# Validate IP with optional CIDR
 validate_ip_cidr() {
   local ip_cidr="$1"
-  
   if [[ ! "$ip_cidr" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}(/([0-9]|[1-2][0-9]|3[0-2]))?$ ]]; then
-    echo "❌ Invalid IP address format. Please use a valid IP with optional CIDR notation."
+    echo "❌ Invalid IP format"
     return 1
   fi
-  
   IFS='/' read -r ip cidr <<< "$ip_cidr"
   IFS='.' read -r -a octets <<< "$ip"
   for octet in "${octets[@]}"; do
     if [[ $octet -lt 0 || $octet -gt 255 ]]; then
-      echo "❌ Invalid IP address. Octets must be between 0 and 255."
+      echo "❌ Invalid IP octet"
       return 1
     fi
   done
-  
-  if [[ -z "$cidr" ]]; then
-    cidr=32
-  fi
-  
-  if [[ $cidr -lt 0 || $cidr -gt 32 ]]; then
-    echo "❌ Invalid CIDR notation. Must be between /0 and /32."
-    return 1
-  fi
-  
+  [[ -z "$cidr" ]] && cidr=32
+  [[ $cidr -lt 0 || $cidr -gt 32 ]] && { echo "❌ Invalid CIDR"; return 1; }
   echo "$ip_cidr"
-  return 0
 }
 
-# Sanitize and validate IP input
 sanitize_ip_cidr() {
-  local ip_cidr="$1"
-  ip_cidr=$(echo "$ip_cidr" | tr -d ' ;')
-  
-  if [[ ! "$ip_cidr" =~ / ]]; then
-    ip_cidr="${ip_cidr}/32"
-  fi
-  
+  local ip_cidr=$(echo "$1" | tr -d ' ;')
+  [[ "$ip_cidr" =~ / ]] || ip_cidr="${ip_cidr}/32"
   validate_ip_cidr "$ip_cidr"
 }
 
-# Log function in CSV format without timestamp
 log_action() {
   local ip="$1"
   local developer="$2"
   local env="$3"
   local status="$4"
   local rule_name="$5"
-  local logfile="$LOG_DIR/firewall_$(date +%Y-%m).log"
 
-  # If file does not exist, add header
-  if [ ! -f "$logfile" ]; then
-    echo "IP,Developer,Environment,Status,RuleName" >> "$logfile"
+  if [ ! -f "$LOG_FILE" ]; then
+    echo "IP,Developer,Environment,Status,RuleName" >> "$LOG_FILE"
   fi
 
-  echo "$ip,$developer,$env,$status,$rule_name" >> "$logfile"
+  echo "$ip,$developer,$env,$status,$rule_name" >> "$LOG_FILE"
 }
 
-# Main script logic
 main() {
   local RESOURCE_GROUP="$1"
   local SERVER_NAME="$2"
@@ -81,45 +74,27 @@ main() {
   local ENVIRONMENT="$5"
 
   if [ -z "$RESOURCE_GROUP" ] || [ -z "$SERVER_NAME" ] || [ -z "$USER_IP" ] || [ -z "$DEVELOPER" ] || [ -z "$ENVIRONMENT" ]; then
-    echo "❌ Missing required arguments: RESOURCE_GROUP, SERVER_NAME, USER_IP, DEVELOPER, ENVIRONMENT"
+    echo "❌ Missing arguments"
     exit 1
   fi
 
-  VALIDATED_IP=$(sanitize_ip_cidr "$USER_IP")
-  if [ $? -ne 0 ]; then
-    echo "❌ IP address validation failed"
-    log_action "$USER_IP" "$DEVELOPER" "$ENVIRONMENT" "Failed" "N/A"
-    exit 1
-  fi
+  VALIDATED_IP=$(sanitize_ip_cidr "$USER_IP") || { log_action "$USER_IP" "$DEVELOPER" "$ENVIRONMENT" "Failed" "N/A"; exit 1; }
 
   IFS='/' read -r start_ip cidr <<< "$VALIDATED_IP"
-  if [[ "$cidr" == "32" ]]; then
-    END_IP="$start_ip"
-    START_IP="$start_ip"
-  else
-    START_IP="$start_ip"
-    END_IP="$start_ip"
-  fi
+  END_IP="$start_ip"
 
   RULE_NAME="DevOpsAccess_$(date +%Y%m%d_%H%M%S)"
-
-  echo "📋 Retrieving current firewall rules..."
-  EXISTING_RULES=$(az sql server firewall-rule list \
-    --resource-group "$RESOURCE_GROUP" \
-    --server "$SERVER_NAME" \
-    --query "[].name" -o tsv)
 
   echo "📝 Adding firewall rule for IP '$VALIDATED_IP'..."
   az sql server firewall-rule create \
     --resource-group "$RESOURCE_GROUP" \
     --server "$SERVER_NAME" \
     --name "$RULE_NAME" \
-    --start-ip-address "$START_IP" \
+    --start-ip-address "$start_ip" \
     --end-ip-address "$END_IP"
 
-  echo "✅ Successfully added IP '$VALIDATED_IP' to server '$SERVER_NAME'"
-  
-  # Log the successful action
+  echo "✅ Added IP '$VALIDATED_IP' to server '$SERVER_NAME'"
+
   log_action "$VALIDATED_IP" "$DEVELOPER" "$ENVIRONMENT" "Success" "$RULE_NAME"
 
   echo "📍 Current firewall rules:"
