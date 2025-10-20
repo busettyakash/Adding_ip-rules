@@ -1,0 +1,23 @@
+name: Upload Firewall Logs to Blob
+
+on:
+  schedule:
+    # 20th of each month at 12:00 AM IST → UTC = 18:30 on 19th
+    - cron: "30 18 19 * *"
+  workflow_dispatch: # manual trigger option
+
+jobs:
+  upload-logs:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Setup Azure CLI
+        uses: azure/setup-azcli@v3
+
+      - name: Upload Monthly Firewall Logs
+        run: ./cicd/updated-firewall.sh upload-only
+        env:
+          AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
