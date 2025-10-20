@@ -21,6 +21,7 @@ on:
         type: string
 
 permissions:
+  id-token: write
   contents: read
 
 jobs:
@@ -32,25 +33,23 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # --- Azure Login using Service Principal ---
-      - name: Azure Login (Service Principal)
+      - name: Azure Login (OIDC)
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
 
-      - name: Verify Azure Login
-        run: az account show
-
-      # --- Set Environment Variables based on input ---
       - name: Set environment variables
         run: |
           case "${{ inputs.environment }}" in
-            dev|qa)
-              echo "RESOURCE_GROUP=gvk-platform-rg" >> $GITHUB_ENV
-              echo "SERVER_NAME=gvk-platform-cosmos" >> $GITHUB_ENV
+            dev)
+              echo "RESOURCE_GROUP=rvc-platform-nonprod-db-rg" >> $GITHUB_ENV
+              echo "SERVER_NAME=rvcplatform-dev-db" >> $GITHUB_ENV
+              ;;
+            qa)
+              echo "RESOURCE_GROUP=rvc-platform-nonprod-db-rg" >> $GITHUB_ENV
+              echo "SERVER_NAME=rvcplatform-qa-db" >> $GITHUB_ENV
               ;;
             prod)
               echo "RESOURCE_GROUP=rvc-platform-prod-db-rg" >> $GITHUB_ENV
@@ -61,25 +60,19 @@ jobs:
               exit 1
               ;;
           esac
-          echo "ENVIRONMENT=${{ inputs.environment }}" >> $GITHUB_ENV
 
-      # --- Add IP to firewall ---
       - name: Add IP to database firewall
         run: |
-          set -e
-          chmod +x cicd/updated-firewall
-          echo "Adding IP ${{ inputs.ip_address }} for developer ${{ inputs.developer_name }} in ${{ inputs.environment }}"
-          ./cicd/updated-firewall \
+          chmod +x cicd/updated-firewal.sh
+          ./cicd/updated-firewal.sh \
             "${RESOURCE_GROUP}" \
             "${SERVER_NAME}" \
-            "${{ inputs.ip_address }}" \
-            "${{ inputs.developer_name }}" \
-            "${{ inputs.environment }}"
+            "${{ inputs.ip_address }}"
 
-      # --- Display current firewall rules ---
       - name: Display current firewall rules
         run: |
           echo "✅ Successfully added IP ${{ inputs.ip_address }} for ${{ inputs.developer_name }}"
+          echo ""
           echo "Current firewall rules for ${SERVER_NAME}:"
           az sql server firewall-rule list \
             --resource-group "${RESOURCE_GROUP}" \
