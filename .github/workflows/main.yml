@@ -88,11 +88,15 @@ jobs:
         run: |
           LOG_DIR="$GITHUB_WORKSPACE/firewall_logs"
           echo "📂 Current log files for environment ${{ inputs.environment }}:"
-          files=$(ls "$LOG_DIR/${{ inputs.environment }}_"*.log 2>/dev/null)
-          if [ -z "$files" ]; then
+
+          # Safe glob to avoid exit code 2 if no files exist
+          shopt -s nullglob
+          files=("$LOG_DIR/${{ inputs.environment }}_"*.log)
+          if [ ${#files[@]} -eq 0 ]; then
             echo "- No log files found"
           else
-            for f in $files; do
+            for f in "${files[@]}"; do
               echo "- $(basename "$f")"
             done
           fi
+          shopt -u nullglob
