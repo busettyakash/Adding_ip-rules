@@ -32,17 +32,36 @@ get_log_filename() {
 # -----------------------------
 if [ "$1" == "upload-only" ]; then
     echo "📤 Uploading monthly log files to Azure Blob Storage..."
-    for env_file in "$LOG_DIR"/*_$(date +'%d-%m-%Y')*.log; do
+
+    declare -A uploaded_count
+    uploaded_count[dev]=0
+    uploaded_count[qa]=0
+    uploaded_count[prod]=0
+
+    for env_file in "$LOG_DIR"/*.log; do
         [ -f "$env_file" ] || continue
-        echo "Uploading $env_file ..."
+
+        # Determine environment from filename prefix
+        env_name=$(basename "$env_file" | cut -d'_' -f1)
+        echo "Uploading $env_file for environment: $env_name ..."
+
         az storage blob upload \
           --account-name "$STORAGE_ACCOUNT" \
           --container-name "$CONTAINER_NAME" \
           --file "$env_file" \
           --name "$(basename "$env_file")" \
           --overwrite
+
         echo "✅ Uploaded $(basename "$env_file")"
+        uploaded_count[$env_name]=$((uploaded_count[$env_name]+1))
     done
+
+    echo ""
+    echo "📊 Upload Summary:"
+    for env in dev qa prod; do
+        echo "- $env files uploaded: ${uploaded_count[$env]}"
+    done
+
     exit 0
 fi
 
