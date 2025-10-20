@@ -68,7 +68,7 @@ jobs:
             "${RESOURCE_GROUP}" \
             "${SERVER_NAME}" \
             "${{ inputs.ip_address }} \
-            "{{ inputs.developer_name }}
+            "${{ inputs.developer_name }}"
 
       - name: Display current firewall rules
         run: |
