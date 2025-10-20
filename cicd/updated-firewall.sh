@@ -2,158 +2,104 @@
 
 set -e
 
-# -----------------------------
-# CONFIGURATION
-# -----------------------------
-LOG_DIR="${GITHUB_WORKSPACE}/firewall_logs"
-mkdir -p "$LOG_DIR"
-
-STORAGE_ACCOUNT="gvkplatformstorage"
-CONTAINER_NAME="ip-adding"
-
-# -----------------------------
-# FUNCTION: Get Monthly Log File
-# -----------------------------
-get_log_filename() {
-    today_day=$(date +%d)
-    if [ "$today_day" -ge 20 ]; then
-        start_date=$(date +%Y-%m-20 | xargs date +%d-%m-%Y -d)
-        end_date=$(date -d "20 next month -1 day" +%d-%m-%Y)
-    else
-        start_date=$(date -d "20 last month" +%d-%m-%Y)
-        end_date=$(date -d "19 this month" +%d-%m-%Y)
-    fi
-    echo "${start_date}_to_${end_date}.log"
-}
-
-# -----------------------------
-# MANUAL OR UPLOAD-ONLY MODE
-# -----------------------------
-if [ "$1" == "upload-manual" ] || [ "$1" == "upload-only" ]; then
-    echo "📤 Uploading monthly log files to Azure Blob Storage..."
-    shopt -s nullglob
-    for env_file in "$LOG_DIR"/*.log; do
-        [ -f "$env_file" ] || continue
-        env_name=$(basename "$env_file" | cut -d'_' -f1)
-        echo "Uploading $env_file for environment: $env_name ..."
-        az storage blob upload \
-          --account-name "$STORAGE_ACCOUNT" \
-          --container-name "$CONTAINER_NAME" \
-          --file "$env_file" \
-          --name "$(basename "$env_file")" \
-          --overwrite
-        echo "✅ Uploaded $(basename "$env_file")"
-    done
-    shopt -u nullglob
-
-    # Display files safely
-    echo ""
-    echo "📂 Current log files in $LOG_DIR:"
-    shopt -s nullglob
-    for e in dev qa prod; do
-        files=("$LOG_DIR/${e}_"*.log)
-        if [ ${#files[@]} -eq 0 ]; then
-            echo "- $e: No file"
-        else
-            for f in "${files[@]}"; do
-                echo "- $e: $(basename "$f")"
-            done
-        fi
-    done
-    shopt -u nullglob
-
-    exit 0
-fi
-
-# -----------------------------
-# NORMAL MODE: Add Firewall IP
-# -----------------------------
+# Check for required dependency
 if ! command -v az &> /dev/null; then
-  echo "❌ az CLI not installed."
+  echo "❌ Required dependency 'az' is not installed."
   exit 1
 fi
 
+# Directory for storing logs
+LOG_DIR="${HOME}/firewall_logs"
+mkdir -p "$LOG_DIR"
+
+# Validate IP with optional CIDR
 validate_ip_cidr() {
-    local ip_cidr="$1"
-    if [[ ! "$ip_cidr" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}(/([0-9]|[1-2][0-9]|3[0-2]))?$ ]]; then
-        echo "❌ Invalid IP format"; return 1
+  local ip_cidr="$1"
+  if [[ ! "$ip_cidr" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}(/([0-9]|[1-2][0-9]|3[0-2]))?$ ]]; then
+    echo "❌ Invalid IP. Use 192.168.1.1 or 192.168.1.0/24."
+    return 1
+  fi
+  IFS='/' read -r ip cidr <<< "$ip_cidr"
+  IFS='.' read -r -a octets <<< "$ip"
+  for octet in "${octets[@]}"; do
+    if [[ $octet -lt 0 || $octet -gt 255 ]]; then
+      echo "❌ Octets must be 0-255."
+      return 1
     fi
-    IFS='/' read -r ip cidr <<< "$ip_cidr"
-    IFS='.' read -r -a octets <<< "$ip"
-    for octet in "${octets[@]}"; do
-        if [[ $octet -lt 0 || $octet -gt 255 ]]; then echo "❌ Invalid IP octet"; return 1; fi
-    done
-    [[ -z "$cidr" ]] && cidr=32
-    echo "$ip_cidr"
+  done
+  [[ -z "$cidr" ]] && cidr=32
+  [[ $cidr -lt 0 || $cidr -gt 32 ]] && { echo "❌ CIDR must be /0-32."; return 1; }
+  echo "$ip_cidr"
+  return 0
 }
 
 sanitize_ip_cidr() {
-    local ip_cidr=$(echo "$1" | tr -d ' ;')
-    [[ "$ip_cidr" =~ / ]] || ip_cidr="${ip_cidr}/32"
-    validate_ip_cidr "$ip_cidr"
+  local ip_cidr="$1"
+  ip_cidr=$(echo "$ip_cidr" | tr -d ' ;')
+  [[ ! "$ip_cidr" =~ / ]] && ip_cidr="${ip_cidr}/32"
+  validate_ip_cidr "$ip_cidr"
 }
 
-log_action() {
-    local ip="$1" local developer="$2" local env="$3" local status="$4" local rule_name="$5"
-
-    MONTHLY_FILE="$LOG_DIR/${env}_$(get_log_filename)"
-    mkdir -p "$(dirname "$MONTHLY_FILE")"
-    [ ! -f "$MONTHLY_FILE" ] && echo "IP,Developer,Environment,Status,RuleName" >> "$MONTHLY_FILE"
-    echo "$ip,$developer,$env,$status,$rule_name" >> "$MONTHLY_FILE"
-
-    # Display current files per environment safely
-    echo ""
-    echo "📂 Current log files in $LOG_DIR:"
-    shopt -s nullglob
-    for e in dev qa prod; do
-        files=("$LOG_DIR/${e}_"*.log)
-        if [ ${#files[@]} -eq 0 ]; then
-            echo "- $e: No file"
-        else
-            for f in "${files[@]}"; do
-                echo "- $e: $(basename "$f")"
-            done
-        fi
-    done
-    shopt -u nullglob
-}
-
+# Main logic
 main() {
-    local RESOURCE_GROUP="$1" local SERVER_NAME="$2" local USER_IP="$3" local DEVELOPER="$4" local ENVIRONMENT="$5"
+  local ENV="$1"              # dev, qa, prod
+  local RESOURCE_GROUP="$2"
+  local SERVER_NAME="$3"
+  local USER_IP="$4"
 
-    if [ -z "$RESOURCE_GROUP" ] || [ -z "$SERVER_NAME" ] || [ -z "$USER_IP" ] || [ -z "$DEVELOPER" ] || [ -z "$ENVIRONMENT" ]; then
-        echo "❌ Missing arguments"; exit 1
-    fi
+  if [ -z "$ENV" ] || [ -z "$RESOURCE_GROUP" ] || [ -z "$SERVER_NAME" ] || [ -z "$USER_IP" ]; then
+    echo "❌ Missing arguments: ENV RESOURCE_GROUP SERVER_NAME USER_IP"
+    exit 1
+  fi
 
-    VALIDATED_IP=$(sanitize_ip_cidr "$USER_IP") || { log_action "$USER_IP" "$DEVELOPER" "$ENVIRONMENT" "Failed" "N/A"; exit 1; }
+  # Determine monthly log file
+  DAY=$(date +%d)
+  MONTH=$(date +%Y-%m)
+  if [ "$DAY" -ge 20 ]; then
+    LOG_FILE="$LOG_DIR/${ENV}_firewall_${MONTH}-20.log"
+  else
+    LOG_FILE="$LOG_DIR/${ENV}_firewall_${MONTH}.log"
+  fi
+  touch "$LOG_FILE"
 
-    IFS='/' read -r start_ip cidr <<< "$VALIDATED_IP"
-    END_IP="$start_ip"
-    RULE_NAME="DevOpsAccess_${start_ip//./-}"
+  # Sanitize IP
+  VALIDATED_IP=$(sanitize_ip_cidr "$USER_IP") || { echo "❌ IP validation failed"; exit 1; }
+  IFS='/' read -r START_IP CIDR <<< "$VALIDATED_IP"
+  END_IP="$START_IP"
 
-    EXISTING_RULE=$(az sql server firewall-rule list \
-        --resource-group "$RESOURCE_GROUP" \
-        --server "$SERVER_NAME" \
-        --query "[?startIpAddress=='$start_ip' && endIpAddress=='$END_IP'].name" \
-        -o tsv)
+  # Check existing firewall rules
+  EXISTING_RULES=$(az sql server firewall-rule list \
+    --resource-group "$RESOURCE_GROUP" \
+    --server "$SERVER_NAME" \
+    --query "[].{name:name, start:startIpAddress, end:endIpAddress}" -o tsv)
+  
+  DUPLICATE=$(echo "$EXISTING_RULES" | awk -v start="$START_IP" -v end="$END_IP" '$2==start && $3==end {print $1}')
+  if [ -n "$DUPLICATE" ]; then
+    echo "⚠️ IP '$VALIDATED_IP' already exists as rule '$DUPLICATE'. Skipping."
+    exit 0
+  fi
 
-    if [ -n "$EXISTING_RULE" ]; then
-        echo "⚠ IP $start_ip already exists in rule $EXISTING_RULE"
-        log_action "$VALIDATED_IP" "$DEVELOPER" "$ENVIRONMENT" "AlreadyExists" "$EXISTING_RULE"
-        exit 0
-    fi
+  # Create new firewall rule
+  RULE_NAME="DevOpsAccess_$(date +%Y%m%d_%H%M%S)"
+  echo "📝 Adding firewall rule for IP '$VALIDATED_IP'..."
+  az sql server firewall-rule create \
+    --resource-group "$RESOURCE_GROUP" \
+    --server "$SERVER_NAME" \
+    --name "$RULE_NAME" \
+    --start-ip-address "$START_IP" \
+    --end-ip-address "$END_IP"
 
-    echo "📝 Adding firewall rule for IP '$VALIDATED_IP'..."
-    az sql server firewall-rule create \
-        --resource-group "$RESOURCE_GROUP" \
-        --server "$SERVER_NAME" \
-        --name "$RULE_NAME" \
-        --start-ip-address "$start_ip" \
-        --end-ip-address "$END_IP"
+  echo "✅ Added IP '$VALIDATED_IP' to server '$SERVER_NAME'"
 
-    echo "✅ Added IP '$VALIDATED_IP' to server '$SERVER_NAME'"
-    log_action "$VALIDATED_IP" "$DEVELOPER" "$ENVIRONMENT" "Success" "$RULE_NAME"
+  # Append to env log file
+  echo "$(date '+%Y-%m-%d %H:%M:%S') | $SERVER_NAME | $VALIDATED_IP | $RULE_NAME" >> "$LOG_FILE"
+  echo "🗒️ Logged IP to file: $LOG_FILE"
+
+  # Display current firewall rules
+  az sql server firewall-rule list \
+    --resource-group "$RESOURCE_GROUP" \
+    --server "$SERVER_NAME" \
+    --output table
 }
 
 main "$@"
-
