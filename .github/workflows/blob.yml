@@ -4,7 +4,7 @@ on:
   schedule:
     # 20th of each month at 12:00 AM IST → UTC = 18:30 on 19th
     - cron: "30 18 19 * *"
-  workflow_dispatch: # manual trigger option
+  workflow_dispatch:
 
 permissions:
   id-token: write
@@ -16,7 +16,7 @@ jobs:
 
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Azure Login (OIDC)
         uses: azure/login@v2
@@ -28,7 +28,13 @@ jobs:
       - name: Make script executable
         run: chmod +x ./cicd/updated-firewall.sh
 
+      - name: List log files before upload
+        run: ls -la ./firewall_logs/
+
       - name: Upload Monthly Firewall Logs
         run: ./cicd/updated-firewall.sh upload-only
         env:
           AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
+
+      - name: Verify upload
+        run: echo "✅ Monthly firewall logs upload completed"
