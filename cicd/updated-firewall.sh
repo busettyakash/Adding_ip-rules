@@ -63,6 +63,7 @@ main() {
   local DEVELOPER_NAME="$3"
   local USER_IP="$4"
 
+  # Require all 4 arguments
   if [ -z "$RESOURCE_GROUP" ] || [ -z "$SERVER_NAME" ] || [ -z "$DEVELOPER_NAME" ] || [ -z "$USER_IP" ]; then
     echo "❌ Missing required arguments: RESOURCE_GROUP, SERVER_NAME, DEVELOPER_NAME, USER_IP"
     exit 1
