@@ -48,7 +48,7 @@ jobs:
               echo "SERVER_NAME=gvk-platform-sql" >> $GITHUB_ENV
               ;;
             qa)
-              echo "RESOURCE_GROUP=gvk-platform-rgg" >> $GITHUB_ENV
+              echo "RESOURCE_GROUP=gvk-platform-rg" >> $GITHUB_ENV
               echo "SERVER_NAME=gvk-platform-sql" >> $GITHUB_ENV
               ;;
             prod)
