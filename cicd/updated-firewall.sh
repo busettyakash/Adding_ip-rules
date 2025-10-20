@@ -46,9 +46,10 @@ main() {
   local RESOURCE_GROUP="$2"
   local SERVER_NAME="$3"
   local USER_IP="$4"
+  local DEVELOPER_NAME="$5"   # new argument
 
-  if [ -z "$ENV" ] || [ -z "$RESOURCE_GROUP" ] || [ -z "$SERVER_NAME" ] || [ -z "$USER_IP" ]; then
-    echo "❌ Missing arguments: ENV RESOURCE_GROUP SERVER_NAME USER_IP"
+  if [ -z "$ENV" ] || [ -z "$RESOURCE_GROUP" ] || [ -z "$SERVER_NAME" ] || [ -z "$USER_IP" ] || [ -z "$DEVELOPER_NAME" ]; then
+    echo "❌ Missing arguments: ENV RESOURCE_GROUP SERVER_NAME USER_IP DEVELOPER_NAME"
     exit 1
   fi
 
@@ -91,8 +92,8 @@ main() {
 
   echo "✅ Added IP '$VALIDATED_IP' to server '$SERVER_NAME'"
 
-  # Append to env log file
-  echo "$(date '+%Y-%m-%d %H:%M:%S') | $SERVER_NAME | $VALIDATED_IP | $RULE_NAME" >> "$LOG_FILE"
+  # Append to env log file with developer name
+  echo "$(date '+%Y-%m-%d %H:%M:%S') | $SERVER_NAME | $VALIDATED_IP | $RULE_NAME | $DEVELOPER_NAME" >> "$LOG_FILE"
   echo "🗒️ Logged IP to file: $LOG_FILE"
 
   # Display current firewall rules
