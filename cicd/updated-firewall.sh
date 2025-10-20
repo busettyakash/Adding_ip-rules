@@ -80,6 +80,10 @@ log_action() {
 
   MONTHLY_FILE="$LOG_DIR/${env}_$(get_log_filename)"
   mkdir -p "$(dirname "$MONTHLY_FILE")"
+
+  # Display environment-specific log file being used
+  echo "📂 Logging to file: $MONTHLY_FILE"
+
   [ ! -f "$MONTHLY_FILE" ] && echo "IP,Developer,Environment,Status,RuleName" >> "$MONTHLY_FILE"
   echo "$ip,$developer,$env,$status,$rule_name" >> "$MONTHLY_FILE"
 }
