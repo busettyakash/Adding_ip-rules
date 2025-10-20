@@ -65,11 +65,9 @@ jobs:
         run: |
           chmod +x cicd/updated-firewall.sh
           ./cicd/updated-firewall.sh \
-            --env "${{ inputs.environment }}" \
-            --rg "${RESOURCE_GROUP}" \
-            --server "${SERVER_NAME}" \
-            --ip "${{ inputs.ip_address }}" \
-            --dev "${{ inputs.developer_name }}"
+            "${RESOURCE_GROUP}" \
+            "${SERVER_NAME}" \
+            "${{ inputs.ip_address }}"
 
       - name: Display current firewall rules
         run: |
