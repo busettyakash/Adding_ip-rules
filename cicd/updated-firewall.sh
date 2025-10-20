@@ -2,17 +2,19 @@
 
 set -e
 
-# Check az CLI
-if ! command -v az &> /dev/null; then
-  echo "❌ Required dependency 'az' is not installed."
-  exit 1
-fi
-
-# Absolute log folder path
+# -----------------------------
+# CONFIGURATION
+# -----------------------------
 LOG_DIR="$HOME/firewall_logs"
 mkdir -p "$LOG_DIR"
 
-# Generate log filename for 20th prev month → 19th current month
+STORAGE_ACCOUNT="gvkplatformstorage"
+CONTAINER_NAME="ip-adding"
+# Optional: export AZURE_STORAGE_CONNECTION_STRING="..."
+
+# -----------------------------
+# FUNCTION: Get Monthly Log File
+# -----------------------------
 get_log_filename() {
   today_day=$(date +%d)
   if [ "$today_day" -ge 20 ]; then
@@ -22,26 +24,45 @@ get_log_filename() {
     start_date=$(date -d "20 last month" +%d-%m-%Y)
     end_date=$(date -d "19 this month" +%d-%m-%Y)
   fi
-  echo "$LOG_DIR/${start_date}_to_${end_date}.log"
+  echo "${start_date}_to_${end_date}.log"
 }
 
-LOG_FILE=$(get_log_filename)
-echo "📂 Firewall log file: $LOG_FILE"
+# -----------------------------
+# MODE: Upload Only
+# -----------------------------
+if [ "$1" == "upload-only" ]; then
+    echo "📤 Uploading monthly log files to Azure Blob Storage..."
+    for env_file in "$LOG_DIR"/*_$(date +'%d-%m-%Y')*.log; do
+        [ -f "$env_file" ] || continue
+        echo "Uploading $env_file ..."
+        az storage blob upload \
+          --account-name "$STORAGE_ACCOUNT" \
+          --container-name "$CONTAINER_NAME" \
+          --file "$env_file" \
+          --name "$(basename "$env_file")" \
+          --overwrite
+        echo "✅ Uploaded $(basename "$env_file")"
+    done
+    exit 0
+fi
 
-# Validate IP with optional CIDR
+# -----------------------------
+# NORMAL MODE: Add Firewall IP
+# -----------------------------
+if ! command -v az &> /dev/null; then
+  echo "❌ Required dependency 'az' is not installed."
+  exit 1
+fi
+
 validate_ip_cidr() {
   local ip_cidr="$1"
   if [[ ! "$ip_cidr" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}(/([0-9]|[1-2][0-9]|3[0-2]))?$ ]]; then
-    echo "❌ Invalid IP format"
-    return 1
+    echo "❌ Invalid IP format"; return 1
   fi
   IFS='/' read -r ip cidr <<< "$ip_cidr"
   IFS='.' read -r -a octets <<< "$ip"
   for octet in "${octets[@]}"; do
-    if [[ $octet -lt 0 || $octet -gt 255 ]]; then
-      echo "❌ Invalid IP octet"
-      return 1
-    fi
+    if [[ $octet -lt 0 || $octet -gt 255 ]]; then echo "❌ Invalid IP octet"; return 1; fi
   done
   [[ -z "$cidr" ]] && cidr=32
   [[ $cidr -lt 0 || $cidr -gt 32 ]] && { echo "❌ Invalid CIDR"; return 1; }
@@ -55,42 +76,27 @@ sanitize_ip_cidr() {
 }
 
 log_action() {
-  local ip="$1"
-  local developer="$2"
-  local env="$3"
-  local status="$4"
-  local rule_name="$5"
+  local ip="$1" local developer="$2" local env="$3" local status="$4" local rule_name="$5"
 
-  mkdir -p "$(dirname "$LOG_FILE")"
-
-  if [ ! -f "$LOG_FILE" ]; then
-    echo "IP,Developer,Environment,Status,RuleName" >> "$LOG_FILE"
-  fi
-
-  echo "$ip,$developer,$env,$status,$rule_name" >> "$LOG_FILE"
+  MONTHLY_FILE="$LOG_DIR/${env}_$(get_log_filename)"
+  mkdir -p "$(dirname "$MONTHLY_FILE")"
+  [ ! -f "$MONTHLY_FILE" ] && echo "IP,Developer,Environment,Status,RuleName" >> "$MONTHLY_FILE"
+  echo "$ip,$developer,$env,$status,$rule_name" >> "$MONTHLY_FILE"
 }
 
 main() {
-  local RESOURCE_GROUP="$1"
-  local SERVER_NAME="$2"
-  local USER_IP="$3"
-  local DEVELOPER="$4"
-  local ENVIRONMENT="$5"
+  local RESOURCE_GROUP="$1" local SERVER_NAME="$2" local USER_IP="$3" local DEVELOPER="$4" local ENVIRONMENT="$5"
 
   if [ -z "$RESOURCE_GROUP" ] || [ -z "$SERVER_NAME" ] || [ -z "$USER_IP" ] || [ -z "$DEVELOPER" ] || [ -z "$ENVIRONMENT" ]; then
-    echo "❌ Missing arguments"
-    exit 1
+    echo "❌ Missing arguments"; exit 1
   fi
 
   VALIDATED_IP=$(sanitize_ip_cidr "$USER_IP") || { log_action "$USER_IP" "$DEVELOPER" "$ENVIRONMENT" "Failed" "N/A"; exit 1; }
 
   IFS='/' read -r start_ip cidr <<< "$VALIDATED_IP"
   END_IP="$start_ip"
-
-  # Use IP-based rule name to avoid duplicates
   RULE_NAME="DevOpsAccess_${start_ip//./-}"
 
-  # Check if the IP is already added
   EXISTING_RULE=$(az sql server firewall-rule list \
     --resource-group "$RESOURCE_GROUP" \
     --server "$SERVER_NAME" \
@@ -112,14 +118,10 @@ main() {
     --end-ip-address "$END_IP"
 
   echo "✅ Added IP '$VALIDATED_IP' to server '$SERVER_NAME'"
-
   log_action "$VALIDATED_IP" "$DEVELOPER" "$ENVIRONMENT" "Success" "$RULE_NAME"
 
   echo "📍 Current firewall rules:"
-  az sql server firewall-rule list \
-    --resource-group "$RESOURCE_GROUP" \
-    --server "$SERVER_NAME" \
-    --output table
+  az sql server firewall-rule list --resource-group "$RESOURCE_GROUP" --server "$SERVER_NAME" --output table
 }
 
 main "$@"
