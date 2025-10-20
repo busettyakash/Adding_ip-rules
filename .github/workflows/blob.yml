@@ -21,9 +21,6 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Setup Azure CLI
-        uses: azure/setup-az@v3
-
       - name: Upload Monthly Firewall Logs
         run: ./cicd/updated-firewall.sh upload-only
         env:
