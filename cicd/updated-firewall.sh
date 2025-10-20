@@ -91,8 +91,9 @@ main() {
     fi
   done <<< "$EXISTING_IPS"
 
-  # Generate unique rule name
-  RULE_NAME="${DEVELOPER_NAME}_Access_$(date +%Y%m%d_%H%M%S)"
+    # Generate unique rule name
+  RULE_NAME="DevOpsAccess_$(date +%Y%m%d_%H%M%S)"
+
 
   # Add firewall rule
   echo "📝 Adding firewall rule for IP '$VALIDATED_IP'..."
