@@ -1,11 +1,9 @@
 #!/bin/bash
-
 set -e
 
 # -----------------------------
 # CONFIGURATION
 # -----------------------------
-# Use GitHub workspace so files persist during workflow
 LOG_DIR="${GITHUB_WORKSPACE}/firewall_logs"
 mkdir -p "$LOG_DIR"
 
@@ -32,18 +30,45 @@ get_log_filename() {
 # -----------------------------
 if [ "$1" == "upload-only" ]; then
     echo "📤 Uploading monthly log files to Azure Blob Storage..."
+
+    declare -A uploaded_count
+    declare -A skipped_count
+    uploaded_count[dev]=0; uploaded_count[qa]=0; uploaded_count[prod]=0
+    skipped_count[dev]=0; skipped_count[qa]=0; skipped_count[prod]=0
+
     for env_file in "$LOG_DIR"/*.log; do
         [ -f "$env_file" ] || continue
+
         env_name=$(basename "$env_file" | cut -d'_' -f1)
+
+        if [ -z "$env_name" ] || [[ ! "$env_name" =~ ^(dev|qa|prod)$ ]]; then
+            echo "⚠ Skipping unknown environment file: $env_file"
+            continue
+        fi
+
         echo "Uploading $env_file for environment: $env_name ..."
-        az storage blob upload \
+
+        if az storage blob upload \
           --account-name "$STORAGE_ACCOUNT" \
           --container-name "$CONTAINER_NAME" \
           --file "$env_file" \
           --name "$(basename "$env_file")" \
-          --overwrite
-        echo "✅ Uploaded $(basename "$env_file")"
+          --overwrite; then
+            echo "✅ Uploaded $(basename "$env_file")"
+            uploaded_count[$env_name]=$((uploaded_count[$env_name]+1))
+        else
+            echo "❌ Failed to upload $(basename "$env_file")"
+            skipped_count[$env_name]=$((skipped_count[$env_name]+1))
+        fi
     done
+
+    echo ""
+    echo "📊 Upload Summary:"
+    for env in dev qa prod; do
+        echo "- $env files uploaded: ${uploaded_count[$env]}"
+        echo "- $env files skipped/failed: ${skipped_count[$env]}"
+    done
+
     exit 0
 fi
 
