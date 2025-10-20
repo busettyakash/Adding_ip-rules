@@ -5,12 +5,12 @@ set -e
 # -----------------------------
 # CONFIGURATION
 # -----------------------------
-LOG_DIR="$HOME/firewall_logs"
+# Use GitHub workspace so files persist during workflow
+LOG_DIR="${GITHUB_WORKSPACE}/firewall_logs"
 mkdir -p "$LOG_DIR"
 
 STORAGE_ACCOUNT="gvkplatformstorage"
 CONTAINER_NAME="ip-adding"
-# Optional: export AZURE_STORAGE_CONNECTION_STRING="..."
 
 # -----------------------------
 # FUNCTION: Get Monthly Log File
@@ -28,40 +28,22 @@ get_log_filename() {
 }
 
 # -----------------------------
-# MODE: Upload Only
+# UPLOAD MODE
 # -----------------------------
 if [ "$1" == "upload-only" ]; then
     echo "📤 Uploading monthly log files to Azure Blob Storage..."
-
-    declare -A uploaded_count
-    uploaded_count[dev]=0
-    uploaded_count[qa]=0
-    uploaded_count[prod]=0
-
     for env_file in "$LOG_DIR"/*.log; do
         [ -f "$env_file" ] || continue
-
-        # Determine environment from filename prefix
         env_name=$(basename "$env_file" | cut -d'_' -f1)
         echo "Uploading $env_file for environment: $env_name ..."
-
         az storage blob upload \
           --account-name "$STORAGE_ACCOUNT" \
           --container-name "$CONTAINER_NAME" \
           --file "$env_file" \
           --name "$(basename "$env_file")" \
           --overwrite
-
         echo "✅ Uploaded $(basename "$env_file")"
-        uploaded_count[$env_name]=$((uploaded_count[$env_name]+1))
     done
-
-    echo ""
-    echo "📊 Upload Summary:"
-    for env in dev qa prod; do
-        echo "- $env files uploaded: ${uploaded_count[$env]}"
-    done
-
     exit 0
 fi
 
@@ -69,7 +51,7 @@ fi
 # NORMAL MODE: Add Firewall IP
 # -----------------------------
 if ! command -v az &> /dev/null; then
-  echo "❌ Required dependency 'az' is not installed."
+  echo "❌ az CLI not installed."
   exit 1
 fi
 
@@ -84,7 +66,6 @@ validate_ip_cidr() {
     if [[ $octet -lt 0 || $octet -gt 255 ]]; then echo "❌ Invalid IP octet"; return 1; fi
   done
   [[ -z "$cidr" ]] && cidr=32
-  [[ $cidr -lt 0 || $cidr -gt 32 ]] && { echo "❌ Invalid CIDR"; return 1; }
   echo "$ip_cidr"
 }
 
@@ -100,7 +81,6 @@ log_action() {
   MONTHLY_FILE="$LOG_DIR/${env}_$(get_log_filename)"
   mkdir -p "$(dirname "$MONTHLY_FILE")"
 
-  # Display environment-specific log file being used
   echo "📂 Logging to file: $MONTHLY_FILE"
 
   [ ! -f "$MONTHLY_FILE" ] && echo "IP,Developer,Environment,Status,RuleName" >> "$MONTHLY_FILE"
