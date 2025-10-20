@@ -43,6 +43,21 @@ if [ "$1" == "upload-only" ]; then
           --overwrite
         echo "✅ Uploaded $(basename "$env_file")"
     done
+
+    # Display files per environment
+    echo ""
+    echo "📂 Current log files in $LOG_DIR:"
+    for env in dev qa prod; do
+        files=$(ls "$LOG_DIR/${env}_"*.log 2>/dev/null)
+        if [ -z "$files" ]; then
+            echo "- $env: No file"
+        else
+            for f in $files; do
+                echo "- $env: $(basename "$f")"
+            done
+        fi
+    done
+
     exit 0
 fi
 
@@ -81,6 +96,20 @@ log_action() {
     mkdir -p "$(dirname "$MONTHLY_FILE")"
     [ ! -f "$MONTHLY_FILE" ] && echo "IP,Developer,Environment,Status,RuleName" >> "$MONTHLY_FILE"
     echo "$ip,$developer,$env,$status,$rule_name" >> "$MONTHLY_FILE"
+
+    # Display current files per environment after logging
+    echo ""
+    echo "📂 Current log files in $LOG_DIR:"
+    for e in dev qa prod; do
+        files=$(ls "$LOG_DIR/${e}_"*.log 2>/dev/null)
+        if [ -z "$files" ]; then
+            echo "- $e: No file"
+        else
+            for f in $files; do
+                echo "- $e: $(basename "$f")"
+            done
+        fi
+    done
 }
 
 main() {
