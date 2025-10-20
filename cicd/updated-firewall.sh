@@ -31,6 +31,7 @@ get_log_filename() {
 # -----------------------------
 if [ "$1" == "upload-only" ]; then
     echo "📤 Uploading monthly log files to Azure Blob Storage..."
+    shopt -s nullglob
     for env_file in "$LOG_DIR"/*.log; do
         [ -f "$env_file" ] || continue
         env_name=$(basename "$env_file" | cut -d'_' -f1)
@@ -43,20 +44,23 @@ if [ "$1" == "upload-only" ]; then
           --overwrite
         echo "✅ Uploaded $(basename "$env_file")"
     done
+    shopt -u nullglob
 
-    # Display files per environment
+    # Display files per environment safely
     echo ""
     echo "📂 Current log files in $LOG_DIR:"
-    for env in dev qa prod; do
-        files=$(ls "$LOG_DIR/${env}_"*.log 2>/dev/null)
-        if [ -z "$files" ]; then
-            echo "- $env: No file"
+    shopt -s nullglob
+    for e in dev qa prod; do
+        files=("$LOG_DIR/${e}_"*.log)
+        if [ ${#files[@]} -eq 0 ]; then
+            echo "- $e: No file"
         else
-            for f in $files; do
-                echo "- $env: $(basename "$f")"
+            for f in "${files[@]}"; do
+                echo "- $e: $(basename "$f")"
             done
         fi
     done
+    shopt -u nullglob
 
     exit 0
 fi
@@ -97,19 +101,21 @@ log_action() {
     [ ! -f "$MONTHLY_FILE" ] && echo "IP,Developer,Environment,Status,RuleName" >> "$MONTHLY_FILE"
     echo "$ip,$developer,$env,$status,$rule_name" >> "$MONTHLY_FILE"
 
-    # Display current files per environment after logging
+    # Display current files per environment safely
     echo ""
     echo "📂 Current log files in $LOG_DIR:"
+    shopt -s nullglob
     for e in dev qa prod; do
-        files=$(ls "$LOG_DIR/${e}_"*.log 2>/dev/null)
-        if [ -z "$files" ]; then
+        files=("$LOG_DIR/${e}_"*.log)
+        if [ ${#files[@]} -eq 0 ]; then
             echo "- $e: No file"
         else
-            for f in $files; do
+            for f in "${files[@]}"; do
                 echo "- $e: $(basename "$f")"
             done
         fi
     done
+    shopt -u nullglob
 }
 
 main() {
