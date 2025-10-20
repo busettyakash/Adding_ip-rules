@@ -39,6 +39,7 @@ jobs:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          auth-type: federated
 
       - name: Set environment variables
         run: |
@@ -59,8 +60,8 @@ jobs:
 
       - name: Add IP to database firewall
         run: |
-          chmod +x cicd/scripts/update-sql-authorized-networks.sh
-          ./cicd/scripts/update-sql-authorized-networks.sh \
+          chmod +x cicd/updated-firewall
+          ./cicd/updated-firewall \
             "${RESOURCE_GROUP}" \
             "${SERVER_NAME}" \
             "${{ inputs.ip_address }}" \
