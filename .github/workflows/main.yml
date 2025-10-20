@@ -63,8 +63,8 @@ jobs:
 
       - name: Add IP to database firewall
         run: |
-          chmod +x cicd/updated-firewal.sh
-          ./cicd/updated-firewal.sh \
+          chmod +x cicd/updated-firewal1.sh
+          ./cicd/updated-firewal1.sh \
             "${RESOURCE_GROUP}" \
             "${SERVER_NAME}" \
             "${{ inputs.ip_address }}"
