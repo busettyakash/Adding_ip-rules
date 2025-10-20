@@ -26,8 +26,6 @@ get_log_filename() {
 }
 
 LOG_FILE=$(get_log_filename)
-
-# Print log file path
 echo "📂 Firewall log file: $LOG_FILE"
 
 # Validate IP with optional CIDR
@@ -63,10 +61,8 @@ log_action() {
   local status="$4"
   local rule_name="$5"
 
-  # Ensure log folder exists
   mkdir -p "$(dirname "$LOG_FILE")"
 
-  # Add header if file doesn't exist
   if [ ! -f "$LOG_FILE" ]; then
     echo "IP,Developer,Environment,Status,RuleName" >> "$LOG_FILE"
   fi
@@ -91,7 +87,21 @@ main() {
   IFS='/' read -r start_ip cidr <<< "$VALIDATED_IP"
   END_IP="$start_ip"
 
-  RULE_NAME="DevOpsAccess_$(date +%Y%m%d_%H%M%S)"
+  # Use IP-based rule name to avoid duplicates
+  RULE_NAME="DevOpsAccess_${start_ip//./-}"
+
+  # Check if the IP is already added
+  EXISTING_RULE=$(az sql server firewall-rule list \
+    --resource-group "$RESOURCE_GROUP" \
+    --server "$SERVER_NAME" \
+    --query "[?startIpAddress=='$start_ip' && endIpAddress=='$END_IP'].name" \
+    -o tsv)
+
+  if [ -n "$EXISTING_RULE" ]; then
+    echo "⚠ IP $start_ip already exists in rule $EXISTING_RULE"
+    log_action "$VALIDATED_IP" "$DEVELOPER" "$ENVIRONMENT" "AlreadyExists" "$EXISTING_RULE"
+    exit 0
+  fi
 
   echo "📝 Adding firewall rule for IP '$VALIDATED_IP'..."
   az sql server firewall-rule create \
