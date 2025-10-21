@@ -70,7 +70,7 @@ jobs:
 
       - name: Apply Argo CD Ingress
         run: |
-          envsubst < .k8s/argocd-ingress.yaml | kubectl apply -f -
+          envsubst < k8s/argocd-ingress.yaml | kubectl apply -f -
 
       - name: Wait for Argo CD Server Pod
         run: |
