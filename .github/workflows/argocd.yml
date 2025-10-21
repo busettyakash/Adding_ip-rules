@@ -1,4 +1,4 @@
-name: Install Argo CD with Custom Admin Password & Automatic HTTPS
+name: Install Argo CD on AKS with Automatic HTTPS
 
 on:
   workflow_dispatch:
@@ -10,34 +10,43 @@ jobs:
       KUBECONFIG: ${{ github.workspace }}/kubeconfig
 
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Set up kubectl
-        uses: azure/setup-kubectl@v3
+      # --- Azure Login via OIDC ---
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
         with:
-          version: 'latest'
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Write kubeconfig
+      # --- Get AKS credentials ---
+      - name: Get AKS credentials
         run: |
-          echo "${{ secrets.KUBECONFIG_CONTENT }}" > $KUBECONFIG
-          chmod 600 $KUBECONFIG
+          az aks get-credentials --resource-group ${{ secrets.AKS_RESOURCE_GROUP }} \
+                                 --name ${{ secrets.AKS_CLUSTER_NAME }} \
+                                 --file $KUBECONFIG --overwrite-existing
           kubectl config view
 
+      # --- Test cluster connectivity ---
       - name: Test cluster connectivity
         run: |
           kubectl get nodes
 
+      # --- Create Argo CD namespace ---
       - name: Create Argo CD namespace
         run: |
           NAMESPACE="gvk-argocd"
           kubectl create namespace $NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
 
+      # --- Install Argo CD ---
       - name: Install Argo CD
         run: |
           NAMESPACE="gvk-argocd"
           kubectl apply -n $NAMESPACE -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
 
+      # --- Install Cert-Manager ---
       - name: Install Cert-Manager
         run: |
           kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml
@@ -45,7 +54,8 @@ jobs:
           kubectl wait --for=condition=Available deployment -n cert-manager cert-manager-webhook --timeout=180s
           kubectl wait --for=condition=Available deployment -n cert-manager cert-manager-cainjector --timeout=180s
 
-      - name: Create ClusterIssuer for Let’s Encrypt
+      # --- Create ClusterIssuer for Let’s Encrypt ---
+      - name: Create ClusterIssuer
         run: |
           cat <<EOF | kubectl apply -f -
           apiVersion: cert-manager.io/v1
@@ -64,7 +74,8 @@ jobs:
                       class: nginx
           EOF
 
-      - name: Apply Ingress for Argo CD with HTTPS
+      # --- Create Ingress for Argo CD ---
+      - name: Apply Ingress
         run: |
           NAMESPACE="gvk-argocd"
           DOMAIN_NAME="gvk-platform"
@@ -96,12 +107,14 @@ jobs:
                 secretName: argocd-tls
           EOF
 
-      - name: Wait for Argo CD server pod
+      # --- Wait for Argo CD server pod ---
+      - name: Wait for Argo CD server
         run: |
           NAMESPACE="gvk-argocd"
           kubectl wait --for=condition=Ready pod -l app.kubernetes.io/name=argocd-server -n $NAMESPACE --timeout=180s
 
-      - name: Set custom admin password
+      # --- Set custom admin password ---
+      - name: Set Argo CD admin password
         run: |
           NAMESPACE="gvk-argocd"
           CUSTOM_PASSWORD="${{ secrets.ARGOCD_ADMIN_PASSWORD }}"
@@ -110,7 +123,8 @@ jobs:
             -p "{\"stringData\": {\"admin.password\": \"$HASH\", \"admin.passwordMtime\": \"$(date +%FT%T%Z)\"}}"
           echo "✅ Custom admin password set!"
 
-      - name: Output login info
+      # --- Output login info ---
+      - name: Output Argo CD URL
         run: |
           echo "🌐 Argo CD URL: https://gvk-platform"
           echo "🔑 Admin username: admin"
