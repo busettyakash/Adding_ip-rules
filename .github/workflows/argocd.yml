@@ -65,12 +65,12 @@ jobs:
 
       - name: Apply ClusterIssuer
         run: |
-          envsubst < .github/k8s/clusterissuer.yaml | kubectl apply -f -
+          envsubst < k8s/clusterissuer.yaml | kubectl apply -f -
           kubectl rollout status clusterissuer/letsencrypt --timeout=180s || true
 
       - name: Apply Argo CD Ingress
         run: |
-          envsubst < .github/k8s/argocd-ingress.yaml | kubectl apply -f -
+          envsubst < .k8s/argocd-ingress.yaml | kubectl apply -f -
 
       - name: Wait for Argo CD Server Pod
         run: |
