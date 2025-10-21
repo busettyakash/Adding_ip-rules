@@ -3,6 +3,10 @@ name: Install Argo CD on AKS with Automatic HTTPS
 on:
   workflow_dispatch:
 
+permissions:
+  id-token: write
+  contents: read
+
 jobs:
   install-argocd:
     runs-on: ubuntu-latest
