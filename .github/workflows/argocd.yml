@@ -1,0 +1,92 @@
+name: Install Argo CD with Custom Admin Password & HTTPS
+
+on:
+  workflow_dispatch: # Manual trigger
+
+jobs:
+  install-argocd:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'latest'
+
+      - name: Set up Kubeconfig
+        run: |
+          echo "${{ secrets.KUBECONFIG_CONTENT }}" > kubeconfig
+          export KUBECONFIG=$(pwd)/kubeconfig
+
+      - name: Create Argo CD namespace
+        run: |
+          NAMESPACE="gvk-argocd"
+          kubectl create namespace $NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Install Argo CD
+        run: |
+          NAMESPACE="gvk-argocd"
+          kubectl apply -n $NAMESPACE -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+
+      - name: Install Cert-Manager (if not already installed)
+        run: |
+          kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml
+          kubectl wait --for=condition=Available deployment -n cert-manager cert-manager --timeout=180s
+          kubectl wait --for=condition=Available deployment -n cert-manager cert-manager-webhook --timeout=180s
+          kubectl wait --for=condition=Available deployment -n cert-manager cert-manager-cainjector --timeout=180s
+
+      - name: Apply Ingress with automatic HTTPS
+        run: |
+          NAMESPACE="gvk-argocd"
+          DOMAIN_NAME="gvk-platform"
+          cat <<EOF | kubectl apply -f -
+          apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            name: argocd-server-ingress
+            namespace: $NAMESPACE
+            annotations:
+              kubernetes.io/ingress.class: nginx
+              cert-manager.io/cluster-issuer: letsencrypt
+              nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+          spec:
+            rules:
+              - host: $DOMAIN_NAME
+                http:
+                  paths:
+                    - path: /
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: argocd-server
+                          port:
+                            number: 443
+            tls:
+              - hosts:
+                  - $DOMAIN_NAME
+                secretName: argocd-tls
+          EOF
+
+      - name: Wait for Argo CD server pod
+        run: |
+          NAMESPACE="gvk-argocd"
+          kubectl wait --for=condition=Ready pod -l app.kubernetes.io/name=argocd-server -n $NAMESPACE --timeout=180s
+
+      - name: Set custom admin password
+        run: |
+          NAMESPACE="gvk-argocd"
+          CUSTOM_PASSWORD="${{ secrets.ARGOCD_ADMIN_PASSWORD }}"
+          # Generate bcrypt hash for password
+          HASH=$(docker run --rm -e PASSWORD="$CUSTOM_PASSWORD" xmartlabs/bcrypt-cli)
+          kubectl -n $NAMESPACE patch secret argocd-secret \
+            -p "{\"stringData\": {\"admin.password\": \"$HASH\", \"admin.passwordMtime\": \"$(date +%FT%T%Z)\"}}"
+          echo "✅ Custom admin password set!"
+
+      - name: Output login info
+        run: |
+          echo "🌐 Argo CD URL: https://gvk-platform"
+          echo "🔑 Admin username: admin"
+          echo "🔑 Admin password: ${{ secrets.ARGOCD_ADMIN_PASSWORD }}"
