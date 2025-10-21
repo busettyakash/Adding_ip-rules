@@ -22,12 +22,13 @@ jobs:
       - name: Set up Kubeconfig
         run: |
           echo "${{ secrets.KUBECONFIG_CONTENT }}" > $KUBECONFIG
+          chmod 600 $KUBECONFIG
           kubectl config view
 
       - name: Create Argo CD namespace
         run: |
           NAMESPACE="gvk-argocd"
-          kubectl create namespace $NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
+          kubectl create namespace $NAMESPACE --dry-run=client -o yaml --validate=false | kubectl apply -f -
 
       - name: Install Argo CD
         run: |
