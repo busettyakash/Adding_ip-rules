@@ -12,21 +12,20 @@ jobs:
     runs-on: ubuntu-latest
     env:
       KUBECONFIG: ${{ github.workspace }}/kubeconfig
+      LETSENCRYPT_EMAIL: ${{ secrets.LETSENCRYPT_EMAIL }}
+      PUBLIC_DOMAIN: ${{ secrets.PUBLIC_DOMAIN }}
 
     steps:
-      # --- Checkout repository ---
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # --- Azure Login ---
-      - name: Azure Login (OIDC)
+      - name: Azure Login
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      # --- Get AKS credentials ---
       - name: Get AKS credentials
         run: |
           az aks get-credentials \
@@ -35,17 +34,14 @@ jobs:
             --file $KUBECONFIG --overwrite-existing
           kubectl config view
 
-      # --- Verify AKS connectivity ---
       - name: Verify AKS Cluster
         run: kubectl get nodes
 
-      # --- Ensure namespaces ---
       - name: Ensure Namespaces
         run: |
           kubectl create namespace gvk-argocd --dry-run=client -o yaml | kubectl apply -f -
           kubectl create namespace cert-manager --dry-run=client -o yaml | kubectl apply -f -
 
-      # --- Install NGINX Ingress ---
       - name: Install NGINX Ingress
         run: |
           if ! kubectl get ns ingress-nginx >/dev/null 2>&1; then
@@ -53,7 +49,6 @@ jobs:
           fi
           kubectl rollout status deployment/ingress-nginx-controller -n ingress-nginx --timeout=300s
 
-      # --- Install Argo CD ---
       - name: Install Argo CD
         run: |
           if ! kubectl get deployment -n gvk-argocd argocd-server >/dev/null 2>&1; then
@@ -61,7 +56,6 @@ jobs:
           fi
           kubectl rollout status deployment/argocd-server -n gvk-argocd --timeout=300s
 
-      # --- Install Cert-Manager ---
       - name: Install Cert-Manager
         run: |
           kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml
@@ -69,83 +63,23 @@ jobs:
           kubectl rollout status deployment/cert-manager-webhook -n cert-manager --timeout=180s
           kubectl rollout status deployment/cert-manager-cainjector -n cert-manager --timeout=180s
 
-      # --- Create ClusterIssuer ---
-      - name: Create ClusterIssuer
+      - name: Apply ClusterIssuer
         run: |
-          echo "📜 Creating ClusterIssuer..."
-          for i in {1..10}; do
-            if kubectl apply -f - <<EOF; then
-apiVersion: cert-manager.io/v1
-kind: ClusterIssuer
-metadata:
-  name: letsencrypt
-spec:
-  acme:
-    email: ${{ secrets.LETSENCRYPT_EMAIL }}
-    server: https://acme-v02.api.letsencrypt.org/directory
-    privateKeySecretRef:
-      name: letsencrypt-private-key
-    solvers:
-      - http01:
-          ingress:
-            class: nginx
-EOF
-              echo "✅ ClusterIssuer applied successfully."
-              break
-            else
-              echo "⚠️ Retry applying ClusterIssuer (attempt $i)..."
-              sleep 15
-            fi
-            if [ $i -eq 10 ]; then
-              echo "❌ Failed after 10 attempts."
-              exit 1
-            fi
-          done
+          envsubst < .github/k8s/clusterissuer.yaml | kubectl apply -f -
+          kubectl rollout status clusterissuer/letsencrypt --timeout=180s || true
 
-      # --- Create Argo CD Ingress ---
-      - name: Create Argo CD Ingress
+      - name: Apply Argo CD Ingress
         run: |
-          DOMAIN="${{ secrets.PUBLIC_DOMAIN }}"
-          cat <<EOF | kubectl apply -f -
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: argocd-server-ingress
-  namespace: gvk-argocd
-  annotations:
-    kubernetes.io/ingress.class: nginx
-    cert-manager.io/cluster-issuer: letsencrypt
-    nginx.ingress.kubernetes.io/ssl-redirect: "true"
-    nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
-spec:
-  rules:
-    - host: ${DOMAIN}
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: argocd-server
-                port:
-                  number: 443
-  tls:
-    - hosts:
-        - ${DOMAIN}
-      secretName: argocd-tls
-EOF
+          envsubst < .github/k8s/argocd-ingress.yaml | kubectl apply -f -
 
-      # --- Wait for Argo CD server ---
       - name: Wait for Argo CD Server Pod
         run: |
           kubectl wait --for=condition=Ready pod -l app.kubernetes.io/name=argocd-server -n gvk-argocd --timeout=300s
 
-      # --- Wait for TLS certificate ---
       - name: Wait for TLS Certificate
         run: |
           kubectl wait --for=condition=Ready certificate/argocd-tls -n gvk-argocd --timeout=600s
 
-      # --- Set Argo CD admin password ---
       - name: Set Argo CD Admin Password
         run: |
           sudo apt-get update && sudo apt-get install -y apache2-utils
@@ -153,7 +87,6 @@ EOF
           kubectl -n gvk-argocd patch secret argocd-secret \
             -p "{\"stringData\": {\"admin.password\": \"$HASH\", \"admin.passwordMtime\": \"$(date +%FT%T%Z)\"}}"
 
-      # --- Update Azure DNS record ---
       - name: Update Azure DNS Record
         run: |
           DOMAIN=${{ secrets.PUBLIC_DOMAIN }}
@@ -163,7 +96,6 @@ EOF
           az network dns record-set a create -g "$RG" -z "$DNS_ZONE" -n "${DOMAIN%%.$DNS_ZONE}" --ttl 60 --if-none-match || true
           az network dns record-set a add-record -g "$RG" -z "$DNS_ZONE" -n "${DOMAIN%%.$DNS_ZONE}" -a "$IP" --ttl 60
 
-      # --- Output Argo CD URL ---
       - name: Output Argo CD URL
         run: |
           echo "🌐 Argo CD URL: https://${{ secrets.PUBLIC_DOMAIN }}"
