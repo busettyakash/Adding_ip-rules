@@ -1,4 +1,4 @@
-name: Install Argo CD with Custom Admin Password & HTTPS
+name: Install Argo CD with Custom Admin Password & Automatic HTTPS
 
 on:
   workflow_dispatch:
@@ -6,7 +6,6 @@ on:
 jobs:
   install-argocd:
     runs-on: ubuntu-latest
-
     env:
       KUBECONFIG: ${{ github.workspace }}/kubeconfig
 
@@ -19,16 +18,20 @@ jobs:
         with:
           version: 'latest'
 
-      - name: Set up Kubeconfig
+      - name: Write kubeconfig
         run: |
           echo "${{ secrets.KUBECONFIG_CONTENT }}" > $KUBECONFIG
           chmod 600 $KUBECONFIG
           kubectl config view
 
+      - name: Test cluster connectivity
+        run: |
+          kubectl get nodes
+
       - name: Create Argo CD namespace
         run: |
           NAMESPACE="gvk-argocd"
-          kubectl create namespace $NAMESPACE --dry-run=client -o yaml --validate=false | kubectl apply -f -
+          kubectl create namespace $NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
 
       - name: Install Argo CD
         run: |
