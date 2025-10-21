@@ -117,12 +117,16 @@ jobs:
           NAMESPACE="gvk-argocd"
           kubectl wait --for=condition=Ready pod -l app.kubernetes.io/name=argocd-server -n $NAMESPACE --timeout=180s
 
-      # --- Set custom admin password ---
+      # --- Set custom admin password (fixed, no Docker) ---
       - name: Set Argo CD admin password
         run: |
           NAMESPACE="gvk-argocd"
           CUSTOM_PASSWORD="${{ secrets.ARGOCD_ADMIN_PASSWORD }}"
-          HASH=$(docker run --rm -e PASSWORD="$CUSTOM_PASSWORD" xmartlabs/bcrypt-cli)
+          # Install htpasswd if needed
+          sudo apt-get update && sudo apt-get install -y apache2-utils
+          # Generate bcrypt hash
+          HASH=$(htpasswd -bnBC 10 "" "$CUSTOM_PASSWORD" | tr -d ':\n')
+          # Patch Argo CD secret
           kubectl -n $NAMESPACE patch secret argocd-secret \
             -p "{\"stringData\": {\"admin.password\": \"$HASH\", \"admin.passwordMtime\": \"$(date +%FT%T%Z)\"}}"
           echo "✅ Custom admin password set!"
