@@ -31,14 +31,33 @@ jobs:
           NAMESPACE="gvk-argocd"
           kubectl apply -n $NAMESPACE -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
 
-      - name: Install Cert-Manager (if not already installed)
+      - name: Install Cert-Manager
         run: |
           kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml
           kubectl wait --for=condition=Available deployment -n cert-manager cert-manager --timeout=180s
           kubectl wait --for=condition=Available deployment -n cert-manager cert-manager-webhook --timeout=180s
           kubectl wait --for=condition=Available deployment -n cert-manager cert-manager-cainjector --timeout=180s
 
-      - name: Apply Ingress with automatic HTTPS
+      - name: Create ClusterIssuer for Let’s Encrypt
+        run: |
+          cat <<EOF | kubectl apply -f -
+          apiVersion: cert-manager.io/v1
+          kind: ClusterIssuer
+          metadata:
+            name: letsencrypt
+          spec:
+            acme:
+              email: ${{ secrets.LETSENCRYPT_EMAIL }}
+              server: https://acme-v02.api.letsencrypt.org/directory
+              privateKeySecretRef:
+                name: letsencrypt-private-key
+              solvers:
+                - http01:
+                    ingress:
+                      class: nginx
+          EOF
+
+      - name: Apply Ingress for Argo CD with HTTPS
         run: |
           NAMESPACE="gvk-argocd"
           DOMAIN_NAME="gvk-platform"
@@ -79,7 +98,6 @@ jobs:
         run: |
           NAMESPACE="gvk-argocd"
           CUSTOM_PASSWORD="${{ secrets.ARGOCD_ADMIN_PASSWORD }}"
-          # Generate bcrypt hash for password
           HASH=$(docker run --rm -e PASSWORD="$CUSTOM_PASSWORD" xmartlabs/bcrypt-cli)
           kubectl -n $NAMESPACE patch secret argocd-secret \
             -p "{\"stringData\": {\"admin.password\": \"$HASH\", \"admin.passwordMtime\": \"$(date +%FT%T%Z)\"}}"
