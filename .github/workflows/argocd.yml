@@ -69,15 +69,10 @@ jobs:
           kubectl rollout status deployment/cert-manager-webhook -n cert-manager --timeout=180s
           kubectl rollout status deployment/cert-manager-cainjector -n cert-manager --timeout=180s
 
-      # --- Wait for Cert-Manager Webhook ---
-      - name: Wait for Cert-Manager Webhook
-        run: |
-          kubectl rollout status deployment/cert-manager-webhook -n cert-manager --timeout=180s
-
-      # --- Create ClusterIssuer (Let’s Encrypt) ---
+      # --- Create ClusterIssuer ---
       - name: Create ClusterIssuer
         run: |
-          echo "📜 Creating ClusterIssuer for Let's Encrypt..."
+          echo "📜 Creating ClusterIssuer..."
           for i in {1..10}; do
             if kubectl apply -f - <<EOF; then
 apiVersion: cert-manager.io/v1
@@ -102,7 +97,7 @@ EOF
               sleep 15
             fi
             if [ $i -eq 10 ]; then
-              echo "❌ Failed to apply ClusterIssuer after multiple attempts."
+              echo "❌ Failed after 10 attempts."
               exit 1
             fi
           done
