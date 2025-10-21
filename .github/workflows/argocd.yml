@@ -1,4 +1,4 @@
-name: Configure Argo CD on AKS with HTTPS
+name: Configure Argo CD on AKS with HTTPS (Auto DNS)
 
 on:
   workflow_dispatch:
@@ -12,13 +12,14 @@ jobs:
     runs-on: ubuntu-latest
     env:
       KUBECONFIG: ${{ github.workspace }}/kubeconfig
+      DOMAIN_NAME: ${{ secrets.PUBLIC_DOMAIN }}
+      DNS_ZONE: ${{ secrets.AZURE_DNS_ZONE }}
+      DNS_RG: ${{ secrets.AZURE_DNS_RESOURCE_GROUP }}
 
     steps:
-      # --- Checkout repository ---
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # --- Azure OIDC Login ---
       - name: Azure Login (OIDC)
         uses: azure/login@v2
         with:
@@ -26,56 +27,42 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      # --- Get AKS credentials ---
       - name: Get AKS credentials
         run: |
-          az aks get-credentials --resource-group ${{ secrets.AKS_RESOURCE_GROUP }} \
-                                 --name ${{ secrets.AKS_CLUSTER_NAME }} \
-                                 --file $KUBECONFIG --overwrite-existing
-          kubectl config view
+          az aks get-credentials \
+            --resource-group ${{ secrets.AKS_RESOURCE_GROUP }} \
+            --name ${{ secrets.AKS_CLUSTER_NAME }} \
+            --file $KUBECONFIG --overwrite-existing
 
-      # --- Test cluster connectivity ---
-      - name: Test cluster connectivity
+      - name: Verify cluster
         run: kubectl get nodes
 
-      # --- Ensure Argo CD namespace exists ---
-      - name: Ensure Argo CD namespace
+      - name: Ensure namespaces
         run: |
-          NAMESPACE="gvk-argocd"
-          kubectl create namespace $NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
+          kubectl create ns gvk-argocd --dry-run=client -o yaml | kubectl apply -f -
+          kubectl create ns cert-manager --dry-run=client -o yaml | kubectl apply -f -
 
-      # --- Install NGINX Ingress Controller ---
-      - name: Install NGINX Ingress Controller
+      - name: Install NGINX Ingress
         run: |
           if ! kubectl get ns ingress-nginx >/dev/null 2>&1; then
-            echo "📦 Installing NGINX Ingress Controller..."
             kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/cloud/deploy.yaml
-            kubectl wait --for=condition=Available deployment/ingress-nginx-controller -n ingress-nginx --timeout=300s
-          else
-            echo "✅ NGINX Ingress Controller already installed."
           fi
+          kubectl rollout status deployment/ingress-nginx-controller -n ingress-nginx --timeout=300s
 
-      # --- Install Argo CD if not installed ---
       - name: Install Argo CD
         run: |
-          NAMESPACE="gvk-argocd"
-          if ! kubectl get deployment -n $NAMESPACE argocd-server >/dev/null 2>&1; then
-            echo "📦 Installing Argo CD..."
-            kubectl apply -n $NAMESPACE -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
-          else
-            echo "✅ Argo CD already installed, skipping installation."
+          if ! kubectl get deployment -n gvk-argocd argocd-server >/dev/null 2>&1; then
+            kubectl apply -n gvk-argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
           fi
+          kubectl rollout status deployment/argocd-server -n gvk-argocd --timeout=300s
 
-      # --- Install Cert-Manager ---
       - name: Install Cert-Manager
         run: |
-          kubectl create namespace cert-manager --dry-run=client -o yaml | kubectl apply -f -
           kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml
-          kubectl wait --for=condition=Available deployment -n cert-manager cert-manager --timeout=180s
-          kubectl wait --for=condition=Available deployment -n cert-manager cert-manager-webhook --timeout=180s
-          kubectl wait --for=condition=Available deployment -n cert-manager cert-manager-cainjector --timeout=180s
+          kubectl rollout status deployment/cert-manager -n cert-manager --timeout=300s
+          kubectl rollout status deployment/cert-manager-webhook -n cert-manager --timeout=300s
+          kubectl rollout status deployment/cert-manager-cainjector -n cert-manager --timeout=300s
 
-      # --- Create ClusterIssuer for Let’s Encrypt ---
       - name: Create ClusterIssuer
         run: |
           cat <<EOF | kubectl apply -f -
@@ -95,17 +82,14 @@ jobs:
                       class: nginx
           EOF
 
-      # --- Apply Ingress for Argo CD ---
-      - name: Apply Ingress for Argo CD
+      - name: Create Argo CD Ingress
         run: |
-          NAMESPACE="gvk-argocd"
-          DOMAIN_NAME="${{ secrets.PUBLIC_DOMAIN }}"
           cat <<EOF | kubectl apply -f -
           apiVersion: networking.k8s.io/v1
           kind: Ingress
           metadata:
             name: argocd-server-ingress
-            namespace: $NAMESPACE
+            namespace: gvk-argocd
             annotations:
               kubernetes.io/ingress.class: nginx
               cert-manager.io/cluster-issuer: letsencrypt
@@ -128,48 +112,68 @@ jobs:
                   - $DOMAIN_NAME
                 secretName: argocd-tls
           EOF
+          kubectl rollout status deployment/argocd-server -n gvk-argocd --timeout=300s
 
-      # --- Wait for Argo CD server pod ---
-      - name: Wait for Argo CD server pod
+      - name: Get LoadBalancer IP
+        id: getip
         run: |
-          NAMESPACE="gvk-argocd"
-          kubectl wait --for=condition=Ready pod -l app.kubernetes.io/name=argocd-server -n $NAMESPACE --timeout=300s
-
-      # --- Wait for Certificate resource and readiness ---
-      - name: Wait for TLS certificate
-        run: |
-          NAMESPACE="gvk-argocd"
+          echo "⏳ Waiting for ingress external IP..."
           for i in {1..20}; do
-            if kubectl get certificate argocd-tls -n $NAMESPACE >/dev/null 2>&1; then
-              echo "✅ Certificate resource found."
-              break
+            IP=$(kubectl get svc -n ingress-nginx ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+            if [ -n "$IP" ]; then
+              echo "LB_IP=$IP" >> $GITHUB_ENV
+              echo "✅ Found LoadBalancer IP: $IP"
+              exit 0
             fi
-            echo "⏳ Waiting for Certificate resource..."
             sleep 30
           done
-          kubectl wait --for=condition=Ready certificate/argocd-tls -n $NAMESPACE --timeout=600s
-          echo "✅ TLS certificate issued successfully."
+          echo "❌ Failed to get LoadBalancer IP"
+          exit 1
 
-      # --- Set Argo CD admin password ---
+      - name: Create/Update Azure DNS record
+        run: |
+          echo "🌀 Updating Azure DNS A record for $DOMAIN_NAME"
+          az network dns record-set a create \
+            --zone-name $DNS_ZONE \
+            --resource-group $DNS_RG \
+            --name "@" \
+            --ttl 60 --if-none-match || true
+          az network dns record-set a add-record \
+            --zone-name $DNS_ZONE \
+            --resource-group $DNS_RG \
+            --record-set-name "@" \
+            --ipv4-address $LB_IP --ttl 60
+          echo "✅ DNS record created/updated"
+
+      - name: Wait for DNS to resolve
+        run: |
+          echo "⏳ Waiting for $DOMAIN_NAME to resolve to $LB_IP"
+          for i in {1..30}; do
+            RESOLVED=$(dig +short $DOMAIN_NAME | tail -n1)
+            if [ "$RESOLVED" = "$LB_IP" ]; then
+              echo "✅ DNS propagation complete"
+              exit 0
+            fi
+            sleep 20
+          done
+          echo "❌ DNS did not resolve within expected time"
+          exit 1
+
+      - name: Wait for TLS certificate
+        run: |
+          kubectl wait --for=condition=Ready certificate/argocd-tls -n gvk-argocd --timeout=600s
+          echo "✅ TLS certificate ready"
+
       - name: Set Argo CD admin password
         run: |
-          NAMESPACE="gvk-argocd"
-          CUSTOM_PASSWORD="${{ secrets.ARGOCD_ADMIN_PASSWORD }}"
-          sudo apt-get update && sudo apt-get install -y apache2-utils
-          HASH=$(htpasswd -bnBC 10 "" "$CUSTOM_PASSWORD" | tr -d ':\n')
-          kubectl -n $NAMESPACE patch secret argocd-secret \
+          sudo apt-get update -y && sudo apt-get install -y apache2-utils
+          HASH=$(htpasswd -bnBC 10 "" "${{ secrets.ARGOCD_ADMIN_PASSWORD }}" | tr -d ':\n')
+          kubectl -n gvk-argocd patch secret argocd-secret \
             -p "{\"stringData\": {\"admin.password\": \"$HASH\", \"admin.passwordMtime\": \"$(date +%FT%T%Z)\"}}"
-          echo "✅ Admin password updated successfully."
+          echo "✅ Admin password updated"
 
-      # --- Output LoadBalancer IP for DNS setup ---
-      - name: Output LoadBalancer IP
-        run: |
-          echo "🌐 Use this IP to update your DNS A record:"
-          kubectl get svc -n ingress-nginx ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
-
-      # --- Output Argo CD URL ---
       - name: Output Argo CD URL
         run: |
-          echo "🌐 Argo CD URL: https://${{ secrets.PUBLIC_DOMAIN }}"
-          echo "🔑 Admin username: admin"
-          echo "🔑 Admin password: ${{ secrets.ARGOCD_ADMIN_PASSWORD }}"
+          echo "🌐 Open Argo CD: https://${DOMAIN_NAME}"
+          echo "🔑 Username: admin"
+          echo "🔑 Password: ${{ secrets.ARGOCD_ADMIN_PASSWORD }}"
