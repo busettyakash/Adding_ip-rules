@@ -43,7 +43,7 @@ jobs:
           NAMESPACE="gvk-argocd"
           kubectl create namespace $NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
 
-      # --- Install Argo CD if not already installed ---
+      # --- Install Argo CD if not installed ---
       - name: Install Argo CD
         run: |
           NAMESPACE="gvk-argocd"
@@ -61,8 +61,8 @@ jobs:
           kubectl wait --for=condition=Available deployment -n cert-manager cert-manager-webhook --timeout=180s
           kubectl wait --for=condition=Available deployment -n cert-manager cert-manager-cainjector --timeout=180s
 
-      # --- Create or update ClusterIssuer ---
-      - name: Create ClusterIssuer for Let’s Encrypt
+      # --- Create ClusterIssuer for Let’s Encrypt ---
+      - name: Create ClusterIssuer
         run: |
           cat <<EOF | kubectl apply -f -
           apiVersion: cert-manager.io/v1
@@ -85,7 +85,7 @@ jobs:
       - name: Apply Ingress for Argo CD
         run: |
           NAMESPACE="gvk-argocd"
-          DOMAIN_NAME="${{ secrets.PUBLIC_DOMAIN }}" # e.g., gvk-platform.com
+          DOMAIN_NAME="${{ secrets.PUBLIC_DOMAIN }}"
           cat <<EOF | kubectl apply -f -
           apiVersion: networking.k8s.io/v1
           kind: Ingress
@@ -95,6 +95,7 @@ jobs:
             annotations:
               kubernetes.io/ingress.class: nginx
               cert-manager.io/cluster-issuer: letsencrypt
+              nginx.ingress.kubernetes.io/ssl-redirect: "true"
               nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
           spec:
             rules:
@@ -120,12 +121,12 @@ jobs:
           NAMESPACE="gvk-argocd"
           kubectl wait --for=condition=Ready pod -l app.kubernetes.io/name=argocd-server -n $NAMESPACE --timeout=180s
 
-      # --- Wait for TLS certificate to be issued ---
+      # --- Wait for TLS certificate (extended timeout) ---
       - name: Wait for TLS certificate
         run: |
           NAMESPACE="gvk-argocd"
           DOMAIN_NAME="${{ secrets.PUBLIC_DOMAIN }}"
-          kubectl wait --for=condition=Ready certificate argocd-tls -n $NAMESPACE --timeout=300s
+          kubectl wait --for=condition=Ready certificate argocd-tls -n $NAMESPACE --timeout=600s
           echo "✅ TLS certificate issued for $DOMAIN_NAME"
 
       # --- Set Argo CD admin password ---
