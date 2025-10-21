@@ -1,4 +1,4 @@
-name: Configure Argo CD on AKS with HTTPS (Auto DNS)
+name: Configure Argo CD on AKS with HTTPS (Auto DNS + Webhook Fix)
 
 on:
   workflow_dispatch:
@@ -63,9 +63,29 @@ jobs:
           kubectl rollout status deployment/cert-manager-webhook -n cert-manager --timeout=300s
           kubectl rollout status deployment/cert-manager-cainjector -n cert-manager --timeout=300s
 
+      # --- Wait for Cert-Manager Webhook Ready ---
+      - name: Wait for Cert-Manager Webhook
+        run: |
+          echo "⏳ Waiting for cert-manager webhook to be ready..."
+          kubectl rollout status deployment/cert-manager-webhook -n cert-manager --timeout=180s
+          echo "✅ Cert-manager webhook is ready."
+
+      # --- Create ClusterIssuer for Let's Encrypt ---
       - name: Create ClusterIssuer
         run: |
-          cat <<EOF | kubectl apply -f -
+          echo "📜 Creating ClusterIssuer for Let's Encrypt..."
+          for i in {1..10}; do
+            if cat <<EOF | kubectl apply -f -; then
+              echo "✅ ClusterIssuer applied successfully."
+              exit 0
+            else
+              echo "⚠️ Retry applying ClusterIssuer (attempt $i)..."
+              sleep 15
+            fi
+          done
+          echo "❌ Failed to apply ClusterIssuer after multiple attempts."
+          exit 1
+          EOF
           apiVersion: cert-manager.io/v1
           kind: ClusterIssuer
           metadata:
