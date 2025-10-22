@@ -13,15 +13,15 @@ jobs:
     env:
       KUBECONFIG: ${{ github.workspace }}/kubeconfig
       LETSENCRYPT_EMAIL: ${{ secrets.LETSENCRYPT_EMAIL }}
-      PUBLIC_DOMAIN: ${{ secrets.PUBLIC_DOMAIN }} # e.g., gvk.argocd.platform.com
+      PUBLIC_DOMAIN: ${{ secrets.PUBLIC_DOMAIN }}
       AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
       AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
       AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
       AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       AZURE_DNS_RESOURCE_GROUP: ${{ secrets.AZURE_DNS_RESOURCE_GROUP }}
       AZURE_DNS_ZONE: ${{ secrets.AZURE_DNS_ZONE }}
-      STATIC_IP_NAME: ingress-static-ip
       ARGOCD_ADMIN_PASSWORD: ${{ secrets.ARGOCD_ADMIN_PASSWORD }}
+      STATIC_IP_NAME: Ip-testing-ip
 
     steps:
       - name: Checkout repository
@@ -56,50 +56,6 @@ jobs:
             kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/cloud/deploy.yaml
           fi
           kubectl rollout status deployment/ingress-nginx-controller -n ingress-nginx --timeout=300s
-
-      - name: Set or create NGINX Public IP
-        shell: bash
-        env:
-          STATIC_IP_NAME: ${{ env.STATIC_IP_NAME }}
-          RG: ${{ secrets.AZURE_DNS_RESOURCE_GROUP }}
-        run: |
-          # Try to get existing public IP
-          STATIC_IP=$(az network public-ip show -g "$RG" -n "$STATIC_IP_NAME" --query ipAddress -o tsv 2>/dev/null || echo "")
-          
-          if [ -n "$STATIC_IP" ]; then
-            echo "✅ Using existing public IP: $STATIC_IP"
-          else
-            echo "No existing static IP found, attempting to create one..."
-            set +e
-            STATIC_IP=$(az network public-ip create \
-              -g "$RG" \
-              -n "$STATIC_IP_NAME" \
-              --sku Standard \
-              --allocation-method static \
-              --query publicIp.ipAddress -o tsv 2>/dev/null)
-            if [ -n "$STATIC_IP" ]; then
-              echo "✅ Created new static IP: $STATIC_IP"
-            else
-              echo "⚠️ Could not create static IP (limit reached). Will use dynamic IP assigned by Azure."
-              STATIC_IP=""
-            fi
-            set -e
-          fi
-
-          echo "STATIC_IP=$STATIC_IP" >> $GITHUB_ENV
-
-      - name: Patch NGINX Ingress with Public IP (if available)
-        shell: bash
-        run: |
-          if [ -n "$STATIC_IP" ]; then
-            echo "Patching NGINX Ingress to use static IP $STATIC_IP"
-            kubectl patch svc ingress-nginx-controller -n ingress-nginx \
-              -p "{\"spec\": {\"type\": \"LoadBalancer\", \"loadBalancerIP\": \"$STATIC_IP\"}}"
-          else
-            echo "No static IP, using dynamic IP from Azure LoadBalancer"
-            kubectl patch svc ingress-nginx-controller -n ingress-nginx \
-              -p '{"spec": {"type": "LoadBalancer"}}'
-          fi
 
       - name: Install Argo CD
         run: |
@@ -154,37 +110,61 @@ jobs:
           kubectl -n gvk-argocd patch secret argocd-secret \
             -p "{\"stringData\": {\"admin.password\": \"$HASH\", \"admin.passwordMtime\": \"$(date +%FT%T%Z)\"}}"
 
-      - name: Update DNS with Public IP
+      - name: Get existing static IP
         shell: bash
-        env:
-          STATIC_IP: ${{ env.STATIC_IP }}
-          DOMAIN: ${{ secrets.PUBLIC_DOMAIN }}
-          DNS_ZONE: ${{ secrets.AZURE_DNS_ZONE }}
-          RG: ${{ secrets.AZURE_DNS_RESOURCE_GROUP }}
         run: |
-          # If STATIC_IP is empty, wait for dynamic IP
+          STATIC_IP=$(az network public-ip show -g ${{ secrets.AZURE_DNS_RESOURCE_GROUP }} -n $STATIC_IP_NAME --query ipAddress -o tsv)
           if [ -z "$STATIC_IP" ]; then
-            echo "Waiting for dynamic LoadBalancer IP..."
-            MAX_ATTEMPTS=40
-            SLEEP_SECONDS=15
-            for i in $(seq 1 $MAX_ATTEMPTS); do
-              STATIC_IP=$(kubectl get svc -n ingress-nginx ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-              if [ -n "$STATIC_IP" ]; then
-                echo "Ingress IP found: $STATIC_IP"
-                break
-              else
-                echo "Attempt $i/$MAX_ATTEMPTS: LoadBalancer IP not assigned yet. Waiting $SLEEP_SECONDS seconds..."
-                sleep $SLEEP_SECONDS
-              fi
-            done
+            echo "❌ Could not find the public IP $STATIC_IP_NAME"
+            exit 1
+          fi
+          echo "✅ Using existing static IP: $STATIC_IP"
+          echo "STATIC_IP=$STATIC_IP" >> $GITHUB_ENV
+
+      - name: Patch NGINX Ingress with Static IP
+        shell: bash
+        run: |
+          echo "Patching ingress-nginx-controller to use static IP $STATIC_IP"
+          kubectl patch svc ingress-nginx-controller -n ingress-nginx \
+            -p "{\"spec\": {\"type\": \"LoadBalancer\", \"loadBalancerIP\": \"$STATIC_IP\"}}"
+
+      - name: Wait for LoadBalancer IP to be ready and update DNS
+        shell: bash
+        run: |
+          MAX_ATTEMPTS=20
+          SLEEP_SECONDS=15
+          for i in $(seq 1 $MAX_ATTEMPTS); do
+            IP=$(kubectl get svc -n ingress-nginx ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+            if [ -n "$IP" ]; then
+              echo "✅ LoadBalancer IP assigned: $IP"
+              break
+            else
+              echo "Attempt $i/$MAX_ATTEMPTS: LoadBalancer IP not ready. Waiting $SLEEP_SECONDS seconds..."
+              sleep $SLEEP_SECONDS
+            fi
+          done
+
+          if [ -z "$IP" ]; then
+            echo "❌ LoadBalancer IP not assigned after $((MAX_ATTEMPTS * SLEEP_SECONDS / 60)) minutes."
+            exit 1
           fi
 
-          SHORT_NAME=${DOMAIN%.$DNS_ZONE}
-          echo "Updating DNS record for $DOMAIN -> $STATIC_IP"
-          az network dns record-set a delete -g "$RG" -z "$DNS_ZONE" -n "$SHORT_NAME" --yes || true
-          az network dns record-set a create -g "$RG" -z "$DNS_ZONE" -n "$SHORT_NAME" --ttl 60
-          az network dns record-set a add-record -g "$RG" -z "$DNS_ZONE" -n "$SHORT_NAME" -a "$STATIC_IP" --ttl 60
-          echo "DNS updated successfully!"
+          echo "Updating DNS A record for ${{ secrets.PUBLIC_DOMAIN }} -> $IP"
+          az network dns record-set a create \
+            -g "${{ secrets.AZURE_DNS_RESOURCE_GROUP }}" \
+            -z "${{ secrets.AZURE_DNS_ZONE }}" \
+            -n "${{ secrets.PUBLIC_DOMAIN%%.${{ secrets.AZURE_DNS_ZONE }}}}" \
+            --ttl 60 \
+            --if-none-match "*" || true
+
+          az network dns record-set a add-record \
+            -g "${{ secrets.AZURE_DNS_RESOURCE_GROUP }}" \
+            -z "${{ secrets.AZURE_DNS_ZONE }}" \
+            -n "${{ secrets.PUBLIC_DOMAIN%%.${{ secrets.AZURE_DNS_ZONE }}}}" \
+            -a "$IP" \
+            --ttl 60
+
+          echo "✅ DNS updated successfully!"
 
       - name: Output Argo CD URL
         run: |
