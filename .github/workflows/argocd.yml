@@ -63,10 +63,34 @@ jobs:
           kubectl rollout status deployment/cert-manager-webhook -n cert-manager --timeout=180s
           kubectl rollout status deployment/cert-manager-cainjector -n cert-manager --timeout=180s
 
-      - name: Apply ClusterIssuer
+      - name: Wait for DNS propagation
         run: |
-          envsubst < k8s/clusterissuer.yaml | kubectl apply -f -
-          kubectl rollout status clusterissuer/letsencrypt --timeout=180s || true
+          echo "Waiting for DNS propagation of _acme-challenge.${{ secrets.PUBLIC_DOMAIN }}..."
+          for i in $(seq 1 20); do
+            if nslookup _acme-challenge.${{ secrets.PUBLIC_DOMAIN }} >/dev/null 2>&1; then
+              echo "DNS propagated!"
+              break
+            else
+              echo "DNS not propagated yet. Retry in 15s..."
+              sleep 15
+            fi
+          done
+
+      - name: Apply ClusterIssuer with Retry
+        run: |
+          RETRIES=5
+          DELAY=30
+          for i in $(seq 1 $RETRIES); do
+            echo "Attempt $i to apply ClusterIssuer..."
+            envsubst < k8s/clusterissuer.yaml | kubectl apply -f -
+            if kubectl rollout status clusterissuer/letsencrypt -n cert-manager --timeout=180s; then
+              echo "ClusterIssuer ready!"
+              break
+            else
+              echo "ClusterIssuer not ready, retrying in $DELAY seconds..."
+              sleep $DELAY
+            fi
+          done
 
       - name: Apply Argo CD Ingress
         run: |
@@ -76,9 +100,20 @@ jobs:
         run: |
           kubectl wait --for=condition=Ready pod -l app.kubernetes.io/name=argocd-server -n gvk-argocd --timeout=300s
 
-      - name: Wait for TLS Certificate
+      - name: Wait for TLS Certificate with Retry
         run: |
-          kubectl wait --for=condition=Ready certificate/argocd-tls -n gvk-argocd --timeout=600s
+          RETRIES=10
+          DELAY=30
+          for i in $(seq 1 $RETRIES); do
+            echo "Checking TLS certificate attempt $i..."
+            if kubectl get certificate/argocd-tls -n gvk-argocd -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' | grep True; then
+              echo "TLS certificate is ready!"
+              break
+            else
+              echo "TLS certificate not ready yet, retrying in $DELAY seconds..."
+              sleep $DELAY
+            fi
+          done
 
       - name: Set Argo CD Admin Password
         run: |
@@ -95,6 +130,21 @@ jobs:
           IP=$(kubectl get svc -n ingress-nginx ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
           az network dns record-set a create -g "$RG" -z "$DNS_ZONE" -n "${DOMAIN%%.$DNS_ZONE}" --ttl 60 --if-none-match || true
           az network dns record-set a add-record -g "$RG" -z "$DNS_ZONE" -n "${DOMAIN%%.$DNS_ZONE}" -a "$IP" --ttl 60
+
+      - name: Verify Argo CD HTTPS Access
+        run: |
+          URL="https://${{ secrets.PUBLIC_DOMAIN }}"
+          echo "Checking Argo CD HTTPS availability at $URL..."
+          for i in $(seq 1 10); do
+            STATUS=$(curl -k -s -o /dev/null -w "%{http_code}" $URL)
+            if [ "$STATUS" -eq 200 ]; then
+              echo "✅ Argo CD is accessible over HTTPS!"
+              break
+            else
+              echo "Attempt $i: Argo CD not ready yet (status $STATUS). Retrying in 15s..."
+              sleep 15
+            fi
+          done
 
       - name: Output Argo CD URL
         run: |
