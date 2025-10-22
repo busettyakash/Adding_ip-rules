@@ -4,18 +4,18 @@ metadata:
   name: letsencrypt
 spec:
   acme:
-    email: ${LETSENCRYPT_EMAIL}
+    email: ${LETSENCRYPT_EMAIL}                   # GitHub secret
     server: https://acme-v02.api.letsencrypt.org/directory
     privateKeySecretRef:
       name: letsencrypt-private-key
     solvers:
       - dns01:
           azureDNS:
-            clientID: ${AZURE_CLIENT_ID}
+            clientID: ${AZURE_CLIENT_ID}          # GitHub secret
             clientSecretSecretRef:
               name: azure-dns-secret
               key: client-secret
-            subscriptionID: ${AZURE_SUBSCRIPTION_ID}
-            tenantID: ${AZURE_TENANT_ID}
-            resourceGroupName: ${AZURE_DNS_RESOURCE_GROUP}
-            hostedZoneName: ${AZURE_DNS_ZONE}
+            subscriptionID: ${AZURE_SUBSCRIPTION_ID} # GitHub secret
+            tenantID: ${AZURE_TENANT_ID}            # GitHub secret
+            resourceGroupName: ${AZURE_DNS_RESOURCE_GROUP} # gvk-platform-rg
+            hostedZoneName: ${AZURE_DNS_ZONE}      # platform.com
