@@ -63,36 +63,27 @@ jobs:
           kubectl rollout status deployment/cert-manager-webhook -n cert-manager --timeout=180s
           kubectl rollout status deployment/cert-manager-cainjector -n cert-manager --timeout=180s
 
-      - name: Wait for DNS propagation
+      - name: Create Azure DNS Secret
         run: |
-          echo "Waiting for DNS propagation of _acme-challenge.${{ secrets.PUBLIC_DOMAIN }}..."
-          for i in $(seq 1 20); do
-            if nslookup _acme-challenge.${{ secrets.PUBLIC_DOMAIN }} >/dev/null 2>&1; then
-              echo "DNS propagated!"
-              break
-            else
-              echo "DNS not propagated yet. Retry in 15s..."
-              sleep 15
-            fi
-          done
+          kubectl create secret generic azure-dns-secret \
+            --from-literal=client-secret="${{ secrets.AZURE_CLIENT_SECRET }}" \
+            -n cert-manager || true
 
-      - name: Apply ClusterIssuer with Retry
+      - name: Apply ClusterIssuer
+        env:
+          LETSENCRYPT_EMAIL: ${{ secrets.LETSENCRYPT_EMAIL }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          AZURE_DNS_RESOURCE_GROUP: ${{ secrets.AKS_RESOURCE_GROUP }}
+          AZURE_DNS_ZONE: ${{ secrets.AZURE_DNS_ZONE }}
         run: |
-          RETRIES=5
-          DELAY=30
-          for i in $(seq 1 $RETRIES); do
-            echo "Attempt $i to apply ClusterIssuer..."
-            envsubst < k8s/clusterissuer.yaml | kubectl apply -f -
-            if kubectl rollout status clusterissuer/letsencrypt -n cert-manager --timeout=180s; then
-              echo "ClusterIssuer ready!"
-              break
-            else
-              echo "ClusterIssuer not ready, retrying in $DELAY seconds..."
-              sleep $DELAY
-            fi
-          done
+          envsubst < k8s/clusterissuer.yaml | kubectl apply -f -
 
       - name: Apply Argo CD Ingress
+        env:
+          PUBLIC_DOMAIN: ${{ secrets.PUBLIC_DOMAIN }}
         run: |
           envsubst < k8s/argocd-ingress.yaml | kubectl apply -f -
 
@@ -105,12 +96,12 @@ jobs:
           RETRIES=10
           DELAY=30
           for i in $(seq 1 $RETRIES); do
-            echo "Checking TLS certificate attempt $i..."
-            if kubectl get certificate/argocd-tls -n gvk-argocd -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' | grep True; then
-              echo "TLS certificate is ready!"
+            STATUS=$(kubectl get certificate/argocd-tls -n gvk-argocd -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')
+            if [ "$STATUS" == "True" ]; then
+              echo "✅ TLS certificate is ready!"
               break
             else
-              echo "TLS certificate not ready yet, retrying in $DELAY seconds..."
+              echo "Attempt $i: Certificate not ready yet. Retrying in $DELAY seconds..."
               sleep $DELAY
             fi
           done
@@ -126,7 +117,7 @@ jobs:
         run: |
           DOMAIN=${{ secrets.PUBLIC_DOMAIN }}
           DNS_ZONE=${{ secrets.AZURE_DNS_ZONE }}
-          RG=${{ secrets.AZURE_DNS_RESOURCE_GROUP }}
+          RG=${{ secrets.AKS_RESOURCE_GROUP }}
           IP=$(kubectl get svc -n ingress-nginx ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
           az network dns record-set a create -g "$RG" -z "$DNS_ZONE" -n "${DOMAIN%%.$DNS_ZONE}" --ttl 60 --if-none-match || true
           az network dns record-set a add-record -g "$RG" -z "$DNS_ZONE" -n "${DOMAIN%%.$DNS_ZONE}" -a "$IP" --ttl 60
@@ -134,7 +125,6 @@ jobs:
       - name: Verify Argo CD HTTPS Access
         run: |
           URL="https://${{ secrets.PUBLIC_DOMAIN }}"
-          echo "Checking Argo CD HTTPS availability at $URL..."
           for i in $(seq 1 10); do
             STATUS=$(curl -k -s -o /dev/null -w "%{http_code}" $URL)
             if [ "$STATUS" -eq 200 ]; then
