@@ -1,4 +1,4 @@
-name: Configure Argo CD on AKS with HTTPS
+name: Deploy Argo CD on AKS with HTTPS
 
 on:
   workflow_dispatch:
@@ -13,7 +13,14 @@ jobs:
     env:
       KUBECONFIG: ${{ github.workspace }}/kubeconfig
       LETSENCRYPT_EMAIL: ${{ secrets.LETSENCRYPT_EMAIL }}
-      PUBLIC_DOMAIN: ${{ secrets.PUBLIC_DOMAIN }}
+      PUBLIC_DOMAIN: ${{ secrets.PUBLIC_DOMAIN }} # gvk.argocd.platform.com
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      AZURE_DNS_RESOURCE_GROUP: ${{ secrets.AZURE_DNS_RESOURCE_GROUP }}
+      AZURE_DNS_ZONE: ${{ secrets.AZURE_DNS_ZONE }}
+      ARGOCD_ADMIN_PASSWORD: ${{ secrets.ARGOCD_ADMIN_PASSWORD }}
 
     steps:
       - name: Checkout repository
@@ -67,42 +74,31 @@ jobs:
         run: |
           kubectl create secret generic azure-dns-secret \
             --from-literal=client-secret="${{ secrets.AZURE_CLIENT_SECRET }}" \
-            -n cert-manager || true
+            -n cert-manager --dry-run=client -o yaml | kubectl apply -f -
 
       - name: Apply ClusterIssuer
-        env:
-          LETSENCRYPT_EMAIL: ${{ secrets.LETSENCRYPT_EMAIL }}
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          AZURE_DNS_RESOURCE_GROUP: ${{ secrets.AZURE_DNS_RESOURCE_GROUP }} 
-          AZURE_DNS_ZONE: ${{ secrets.AZURE_DNS_ZONE }}
         run: |
-          envsubst < k8s/clusterissuer.yaml | kubectl apply -f -
+          envsubst '${LETSENCRYPT_EMAIL} ${AZURE_CLIENT_ID} ${AZURE_CLIENT_SECRET} ${AZURE_TENANT_ID} ${AZURE_SUBSCRIPTION_ID} ${AZURE_DNS_RESOURCE_GROUP} ${AZURE_DNS_ZONE}' < k8s/clusterissuer.yaml | kubectl apply -f -
 
       - name: Apply Argo CD Ingress
-        env:
-          PUBLIC_DOMAIN: ${{ secrets.PUBLIC_DOMAIN }}
         run: |
-          envsubst < k8s/argocd-ingress.yaml | kubectl apply -f -
+          envsubst '${PUBLIC_DOMAIN}' < k8s/argocd-ingress.yaml | kubectl apply -f -
 
       - name: Wait for Argo CD Server Pod
         run: |
           kubectl wait --for=condition=Ready pod -l app.kubernetes.io/name=argocd-server -n gvk-argocd --timeout=300s
 
-      - name: Wait for TLS Certificate with Retry
+      - name: Wait for TLS Certificate
         run: |
-          RETRIES=10
-          DELAY=30
+          RETRIES=20
           for i in $(seq 1 $RETRIES); do
-            STATUS=$(kubectl get certificate/argocd-tls -n gvk-argocd -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')
+            STATUS=$(kubectl get certificate argocd-tls -n gvk-argocd -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')
             if [ "$STATUS" == "True" ]; then
-              echo "✅ TLS certificate is ready!"
+              echo "✅ Certificate is ready!"
               break
             else
-              echo "Attempt $i: Certificate not ready yet. Retrying in $DELAY seconds..."
-              sleep $DELAY
+              echo "Attempt $i: Certificate not ready yet. Waiting 30s..."
+              sleep 30
             fi
           done
 
@@ -117,24 +113,39 @@ jobs:
         run: |
           DOMAIN=${{ secrets.PUBLIC_DOMAIN }}
           DNS_ZONE=${{ secrets.AZURE_DNS_ZONE }}
-          RG=${{ secrets.AZURE_DNS_RESOURCE_GROUP }} 
-          IP=$(kubectl get svc -n ingress-nginx ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-          az network dns record-set a create -g "$RG" -z "$DNS_ZONE" -n "${DOMAIN%%.$DNS_ZONE}" --ttl 60 --if-none-match || true
-          az network dns record-set a add-record -g "$RG" -z "$DNS_ZONE" -n "${DOMAIN%%.$DNS_ZONE}" -a "$IP" --ttl 60
+          RG=${{ secrets.AZURE_DNS_RESOURCE_GROUP }}
 
-      - name: Verify Argo CD HTTPS Access
-        run: |
-          URL="https://${{ secrets.PUBLIC_DOMAIN }}"
-          for i in $(seq 1 10); do
-            STATUS=$(curl -k -s -o /dev/null -w "%{http_code}" $URL)
-            if [ "$STATUS" -eq 200 ]; then
-              echo "✅ Argo CD is accessible over HTTPS!"
+          echo "Waiting for NGINX Ingress LoadBalancer IP..."
+          for i in {1..20}; do
+            IP=$(kubectl get svc -n ingress-nginx ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+            if [ -n "$IP" ]; then
+              echo "Ingress IP found: $IP"
               break
             else
-              echo "Attempt $i: Argo CD not ready yet (status $STATUS). Retrying in 15s..."
+              echo "Attempt $i: LoadBalancer IP not assigned yet. Waiting 15s..."
               sleep 15
             fi
           done
+
+          if [ -z "$IP" ]; then
+            echo "Error: LoadBalancer IP not assigned. Cannot update DNS."
+            exit 1
+          fi
+
+          echo "Creating or updating DNS A record for $DOMAIN -> $IP"
+          az network dns record-set a create \
+            -g "$RG" \
+            -z "$DNS_ZONE" \
+            -n "${DOMAIN%%.$DNS_ZONE}" \
+            --ttl 60 \
+            --if-none-match "*" || true
+
+          az network dns record-set a add-record \
+            -g "$RG" \
+            -z "$DNS_ZONE" \
+            -n "${DOMAIN%%.$DNS_ZONE}" \
+            -a "$IP" \
+            --ttl 60
 
       - name: Output Argo CD URL
         run: |
