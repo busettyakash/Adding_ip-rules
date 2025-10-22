@@ -9,6 +9,13 @@ spec:
     privateKeySecretRef:
       name: letsencrypt-private-key
     solvers:
-      - http01:
-          ingress:
-            class: nginx
+      - dns01:
+          azureDNS:
+            clientID: ${AZURE_CLIENT_ID}
+            clientSecretSecretRef:
+              name: azure-dns-secret
+              key: client-secret
+            subscriptionID: ${AZURE_SUBSCRIPTION_ID}
+            tenantID: ${AZURE_TENANT_ID}
+            resourceGroupName: ${AZURE_DNS_RESOURCE_GROUP}
+            hostedZoneName: ${AZURE_DNS_ZONE}
