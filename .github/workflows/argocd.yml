@@ -130,6 +130,10 @@ jobs:
 
       - name: Wait for LoadBalancer IP to be ready and update DNS
         shell: bash
+        env:
+          DOMAIN: ${{ secrets.PUBLIC_DOMAIN }}
+          DNS_ZONE: ${{ secrets.AZURE_DNS_ZONE }}
+          RG: ${{ secrets.AZURE_DNS_RESOURCE_GROUP }}
         run: |
           MAX_ATTEMPTS=20
           SLEEP_SECONDS=15
@@ -149,18 +153,21 @@ jobs:
             exit 1
           fi
 
-          echo "Updating DNS A record for ${{ secrets.PUBLIC_DOMAIN }} -> $IP"
+          # Use Bash string manipulation instead of %% operator
+          NAME=${DOMAIN%.$DNS_ZONE}
+
+          echo "Updating DNS A record for $DOMAIN -> $IP"
           az network dns record-set a create \
-            -g "${{ secrets.AZURE_DNS_RESOURCE_GROUP }}" \
-            -z "${{ secrets.AZURE_DNS_ZONE }}" \
-            -n "${{ secrets.PUBLIC_DOMAIN%%.${{ secrets.AZURE_DNS_ZONE }}}}" \
+            -g "$RG" \
+            -z "$DNS_ZONE" \
+            -n "$NAME" \
             --ttl 60 \
             --if-none-match "*" || true
 
           az network dns record-set a add-record \
-            -g "${{ secrets.AZURE_DNS_RESOURCE_GROUP }}" \
-            -z "${{ secrets.AZURE_DNS_ZONE }}" \
-            -n "${{ secrets.PUBLIC_DOMAIN%%.${{ secrets.AZURE_DNS_ZONE }}}}" \
+            -g "$RG" \
+            -z "$DNS_ZONE" \
+            -n "$NAME" \
             -a "$IP" \
             --ttl 60
 
