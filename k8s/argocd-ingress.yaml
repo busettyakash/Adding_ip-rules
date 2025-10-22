@@ -8,7 +8,7 @@ metadata:
     cert-manager.io/cluster-issuer: letsencrypt
 spec:
   rules:
-    - host: ${PUBLIC_DOMAIN}
+    - host: gvk.argocd.platform.com
       http:
         paths:
           - path: /
@@ -20,5 +20,5 @@ spec:
                   number: 443
   tls:
     - hosts:
-        - ${PUBLIC_DOMAIN}
+        - gvk.argocd.platform.com
       secretName: argocd-tls
