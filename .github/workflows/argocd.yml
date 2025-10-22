@@ -76,7 +76,7 @@ jobs:
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          AZURE_DNS_RESOURCE_GROUP: ${{ secrets.AKS_RESOURCE_GROUP }}
+          AZURE_DNS_RESOURCE_GROUP: ${{ secrets.AZURE_DNS_RESOURCE_GROUP }} 
           AZURE_DNS_ZONE: ${{ secrets.AZURE_DNS_ZONE }}
         run: |
           envsubst < k8s/clusterissuer.yaml | kubectl apply -f -
@@ -117,7 +117,7 @@ jobs:
         run: |
           DOMAIN=${{ secrets.PUBLIC_DOMAIN }}
           DNS_ZONE=${{ secrets.AZURE_DNS_ZONE }}
-          RG=${{ secrets.AKS_RESOURCE_GROUP }}
+          RG=${{ secrets.AZURE_DNS_RESOURCE_GROUP }} 
           IP=$(kubectl get svc -n ingress-nginx ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
           az network dns record-set a create -g "$RG" -z "$DNS_ZONE" -n "${DOMAIN%%.$DNS_ZONE}" --ttl 60 --if-none-match || true
           az network dns record-set a add-record -g "$RG" -z "$DNS_ZONE" -n "${DOMAIN%%.$DNS_ZONE}" -a "$IP" --ttl 60
