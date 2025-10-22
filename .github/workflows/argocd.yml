@@ -13,7 +13,7 @@ jobs:
     env:
       KUBECONFIG: ${{ github.workspace }}/kubeconfig
       LETSENCRYPT_EMAIL: ${{ secrets.LETSENCRYPT_EMAIL }}
-      PUBLIC_DOMAIN: ${{ secrets.PUBLIC_DOMAIN }} # gvk.argocd.platform.com
+      PUBLIC_DOMAIN: ${{ secrets.PUBLIC_DOMAIN }} # e.g., gvk.argocd.platform.com
       AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
       AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
       AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
@@ -109,43 +109,47 @@ jobs:
           kubectl -n gvk-argocd patch secret argocd-secret \
             -p "{\"stringData\": {\"admin.password\": \"$HASH\", \"admin.passwordMtime\": \"$(date +%FT%T%Z)\"}}"
 
-      - name: Update Azure DNS Record
+      - name: Wait for NGINX LoadBalancer and update DNS
+        shell: bash
+        env:
+          KUBECONFIG: ${{ github.workspace }}/kubeconfig
+          DOMAIN: ${{ secrets.PUBLIC_DOMAIN }}
+          DNS_ZONE: ${{ secrets.AZURE_DNS_ZONE }}
+          RG: ${{ secrets.AZURE_DNS_RESOURCE_GROUP }}
         run: |
-          DOMAIN=${{ secrets.PUBLIC_DOMAIN }}
-          DNS_ZONE=${{ secrets.AZURE_DNS_ZONE }}
-          RG=${{ secrets.AZURE_DNS_RESOURCE_GROUP }}
+          echo "Checking NGINX Ingress service type..."
+          TYPE=$(kubectl get svc -n ingress-nginx ingress-nginx-controller -o jsonpath='{.spec.type}')
+          if [ "$TYPE" != "LoadBalancer" ]; then
+            echo "Service is $TYPE. Patching to LoadBalancer..."
+            kubectl patch svc ingress-nginx-controller -n ingress-nginx -p '{"spec": {"type": "LoadBalancer"}}'
+          fi
 
           echo "Waiting for NGINX Ingress LoadBalancer IP..."
-          for i in {1..20}; do
+          MAX_ATTEMPTS=40
+          SLEEP_SECONDS=15
+          IP=""
+          for i in $(seq 1 $MAX_ATTEMPTS); do
             IP=$(kubectl get svc -n ingress-nginx ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
             if [ -n "$IP" ]; then
               echo "Ingress IP found: $IP"
               break
             else
-              echo "Attempt $i: LoadBalancer IP not assigned yet. Waiting 15s..."
-              sleep 15
+              echo "Attempt $i/$MAX_ATTEMPTS: LoadBalancer IP not assigned yet. Waiting $SLEEP_SECONDS seconds..."
+              sleep $SLEEP_SECONDS
             fi
           done
 
           if [ -z "$IP" ]; then
-            echo "Error: LoadBalancer IP not assigned. Cannot update DNS."
+            echo "Error: LoadBalancer IP not assigned after $((MAX_ATTEMPTS * SLEEP_SECONDS / 60)) minutes."
             exit 1
           fi
 
-          echo "Creating or updating DNS A record for $DOMAIN -> $IP"
-          az network dns record-set a create \
-            -g "$RG" \
-            -z "$DNS_ZONE" \
-            -n "${DOMAIN%%.$DNS_ZONE}" \
-            --ttl 60 \
-            --if-none-match "*" || true
+          echo "Creating/updating DNS A record for $DOMAIN -> $IP"
+          az network dns record-set a delete -g "$RG" -z "$DNS_ZONE" -n "${DOMAIN%%.$DNS_ZONE}" --yes || true
+          az network dns record-set a create -g "$RG" -z "$DNS_ZONE" -n "${DOMAIN%%.$DNS_ZONE}" --ttl 60
+          az network dns record-set a add-record -g "$RG" -z "$DNS_ZONE" -n "${DOMAIN%%.$DNS_ZONE}" -a "$IP" --ttl 60
 
-          az network dns record-set a add-record \
-            -g "$RG" \
-            -z "$DNS_ZONE" \
-            -n "${DOMAIN%%.$DNS_ZONE}" \
-            -a "$IP" \
-            --ttl 60
+          echo "DNS updated successfully!"
 
       - name: Output Argo CD URL
         run: |
