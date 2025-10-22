@@ -128,11 +128,17 @@ jobs:
 
       - name: Update DNS with Static IP
         shell: bash
+        env:
+          STATIC_IP: ${{ env.STATIC_IP }}
+          DOMAIN: ${{ secrets.PUBLIC_DOMAIN }}
+          DNS_ZONE: ${{ secrets.AZURE_DNS_ZONE }}
+          RG: ${{ secrets.AZURE_DNS_RESOURCE_GROUP }}
         run: |
-          echo "Updating DNS record for ${{ secrets.PUBLIC_DOMAIN }} -> $STATIC_IP"
-          az network dns record-set a delete -g ${{ secrets.AZURE_DNS_RESOURCE_GROUP }} -z ${{ secrets.AZURE_DNS_ZONE }} -n "${{ secrets.PUBLIC_DOMAIN%%.${{ secrets.AZURE_DNS_ZONE }}}}" --yes || true
-          az network dns record-set a create -g ${{ secrets.AZURE_DNS_RESOURCE_GROUP }} -z ${{ secrets.AZURE_DNS_ZONE }} -n "${{ secrets.PUBLIC_DOMAIN%%.${{ secrets.AZURE_DNS_ZONE }}}}" --ttl 60
-          az network dns record-set a add-record -g ${{ secrets.AZURE_DNS_RESOURCE_GROUP }} -z ${{ secrets.AZURE_DNS_ZONE }} -n "${{ secrets.PUBLIC_DOMAIN%%.${{ secrets.AZURE_DNS_ZONE }}}}" -a $STATIC_IP --ttl 60
+          SHORT_NAME=${DOMAIN%.$DNS_ZONE}
+          echo "Updating DNS record for $DOMAIN -> $STATIC_IP"
+          az network dns record-set a delete -g "$RG" -z "$DNS_ZONE" -n "$SHORT_NAME" --yes || true
+          az network dns record-set a create -g "$RG" -z "$DNS_ZONE" -n "$SHORT_NAME" --ttl 60
+          az network dns record-set a add-record -g "$RG" -z "$DNS_ZONE" -n "$SHORT_NAME" -a "$STATIC_IP" --ttl 60
           echo "DNS updated successfully!"
 
       - name: Output Argo CD URL
