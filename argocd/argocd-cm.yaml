@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-cm
+  namespace: argocd
+data:
+  server.insecure: "false"
+  server.rootpath: /
+  url: https://myargocd.duckdns.org
